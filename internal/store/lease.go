@@ -172,7 +172,7 @@ func (s *Store) capBlocked(st *State, n *plan.Node, now time.Time) string {
 // Heartbeat extends a lease if the caller still owns the node at that epoch.
 func (s *Store) Heartbeat(nodeID, owner string, epoch int64, ttl time.Duration, now time.Time) (bool, error) {
 	ok := false
-	err := s.With(func(st *State) error {
+	err := s.withState(func(st *State) error {
 		ns := st.Nodes[nodeID]
 		if ns == nil || ns.Owner != owner || ns.Epoch != epoch || ns.Status != plan.StatusRunning {
 			return nil
@@ -180,7 +180,7 @@ func (s *Store) Heartbeat(nodeID, owner string, epoch int64, ttl time.Duration, 
 		ns.LeaseUntil = now.Add(ttl)
 		ok = true
 		return nil
-	})
+	}, false) // not durable: a lost heartbeat only shortens a lease
 	return ok, err
 }
 

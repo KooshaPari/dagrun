@@ -243,6 +243,7 @@ func (n *Node) Clone() *Node {
 	}
 	c := *n
 	c.Deps = append([]string(nil), n.Deps...)
+	c.FileScope = append([]string(nil), n.FileScope...)
 	c.Artifacts = make([]Artifact, len(n.Artifacts))
 	for i, a := range n.Artifacts {
 		a.MustContain = append([]string(nil), a.MustContain...)

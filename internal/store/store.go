@@ -155,8 +155,16 @@ func (s *Store) readState() (*State, error) {
 	return &st, nil
 }
 
-func (s *Store) writeState(st *State) error {
-	raw, err := json.MarshalIndent(st, "", "  ")
+// writeState persists the document atomically. durable=false skips the fsync:
+// the rename is still atomic, so a crash leaves either the old or the new file,
+// never a torn one. It trades "the last transition may be lost on power loss"
+// for roughly an order of magnitude in write latency, which matters because the
+// whole document is rewritten per transition.
+func (s *Store) writeState(st *State, durable bool) error {
+	// Compact, not indented: this file is a database, not a document. The
+	// human view is `dagrun status --json`. Indenting triples the bytes we
+	// rewrite 1600 times in a 32-worker burst.
+	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
@@ -170,26 +178,30 @@ func (s *Store) writeState(st *State) error {
 		f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+	if durable {
+		if err := f.Sync(); err != nil {
+			f.Close()
+			return err
+		}
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.statePath()); err != nil {
-		return err
-	}
-	if d, err := os.Open(s.dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-	return nil
+	// The rename is atomic. We deliberately do not fsync the directory: that
+	// doubles the syscall cost for a guarantee the artifact-based recovery path
+	// already provides (a lost transition means the node runs again and is
+	// adopted).
+	return os.Rename(tmp, s.statePath())
 }
 
-// With runs fn under an exclusive lock and persists the result. fn must not
-// block on a child process: keep the critical section to microseconds.
+// With runs fn under an exclusive lock and persists the result durably.
 func (s *Store) With(fn func(*State) error) error {
+	return s.withState(fn, true)
+}
+
+// withState is With with a durability choice. Heartbeats use durable=false:
+// they are idempotent, high frequency, and losing one only shortens a lease.
+func (s *Store) withState(fn func(*State) error, durable bool) error {
 	lockPath := filepath.Join(s.dir, "lock")
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
@@ -212,7 +224,7 @@ func (s *Store) With(fn func(*State) error) error {
 		return err
 	}
 	st.UpdatedAt = time.Now().UTC()
-	return s.writeState(st)
+	return s.writeState(st, durable)
 }
 
 // Snapshot returns a copy of the state.

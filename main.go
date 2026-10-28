@@ -17,7 +17,7 @@ import (
 )
 
 // Version is set at build time with -ldflags "-X main.Version=...".
-var Version = "0.3.0"
+var Version = "0.4.0"
 
 const defaultDir = ".dagrun"
 

@@ -158,6 +158,11 @@ func (p *Plan) Validate() []Issue {
 	if cyc, ok := p.Cycle(); ok {
 		add("", "cycle", "dependency cycle: %s", strings.Join(cyc, " -> "))
 	}
+
+	// Collisions are structural: two nodes that can run at the same time and
+	// write the same file race by construction, so they are rejected before a
+	// single node starts rather than discovered as a corrupt artifact later.
+	out = append(out, p.Overlaps()...)
 	return out
 }
 

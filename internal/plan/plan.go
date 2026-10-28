@@ -75,8 +75,11 @@ type Node struct {
 	Model     string     `yaml:"model,omitempty" json:"model,omitempty"`
 	Prompt    string     `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Artifacts []Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
-	Check     string     `yaml:"check,omitempty" json:"check,omitempty"`
-	Workdir   string     `yaml:"workdir,omitempty" json:"workdir,omitempty"`
+	// FileScope lists the glob paths this node may edit. Plan-time collision
+	// detection rejects two parallel nodes whose scopes intersect.
+	FileScope []string `yaml:"file_scope,omitempty" json:"file_scope,omitempty"`
+	Check     string   `yaml:"check,omitempty" json:"check,omitempty"`
+	Workdir   string   `yaml:"workdir,omitempty" json:"workdir,omitempty"`
 	// Isolation is "" (shared checkout) or "worktree" (its own git worktree and
 	// branch). Worktree nodes resolve artifacts inside their own checkout.
 	Isolation   string `yaml:"isolation,omitempty" json:"isolation,omitempty"`
