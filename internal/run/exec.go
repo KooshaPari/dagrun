@@ -108,10 +108,11 @@ func (e *Executor) command(n *plan.Node, prompt, workdir string) (string, []stri
 		a, err := harness.Resolve(n.Harness)
 		if err == nil && a != nil {
 			path, args, cerr := a.Command(harness.Spec{
-				Prompt:  prompt,
-				Workdir: workdir,
-				Model:   n.Model,
-				Tools:   e.opt.Tools,
+				Prompt:   prompt,
+				Workdir:  workdir,
+				Provider: n.Provider,
+				Model:    n.Model,
+				Tools:    e.opt.Tools,
 			})
 			return path, args, false, cerr
 		}

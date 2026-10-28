@@ -42,6 +42,7 @@ type Defaults struct {
 	Estimate    string `yaml:"estimate,omitempty" json:"estimate,omitempty"`
 	Role        string `yaml:"role,omitempty" json:"role,omitempty"`
 	Harness     string `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Provider    string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	Model       string `yaml:"model,omitempty" json:"model,omitempty"`
 	Timeout     string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	MaxAttempts int    `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
@@ -70,6 +71,7 @@ type Node struct {
 	Estimate    string     `yaml:"estimate,omitempty" json:"estimate,omitempty"`
 	Role        string     `yaml:"role,omitempty" json:"role,omitempty"`
 	Harness     string     `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Provider    string     `yaml:"provider,omitempty" json:"provider,omitempty"`
 	Model       string     `yaml:"model,omitempty" json:"model,omitempty"`
 	Prompt      string     `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Artifacts   []Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
@@ -173,6 +175,9 @@ func (p *Plan) normalize() {
 		}
 		if n.Harness == "" {
 			n.Harness = firstNonEmpty(p.Defaults.Harness, "auto")
+		}
+		if n.Provider == "" {
+			n.Provider = p.Defaults.Provider
 		}
 		if n.Model == "" {
 			n.Model = p.Defaults.Model

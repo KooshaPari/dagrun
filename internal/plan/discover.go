@@ -1,12 +1,24 @@
 package plan
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// CmdPrefix marks a work set produced by running a command instead of reading a
+// file: `from: "cmd:ruff check --output-format json ."`.
+const CmdPrefix = "cmd:"
+
+// defaultCmdTimeout bounds a discovery command. A work list that hangs must fail
+// the node, not stall the run.
+const defaultCmdTimeout = 2 * time.Minute
 
 // Discover lets a node turn a verified artifact into a work set, and a template
 // node expand into one child per unit at runtime.
@@ -38,16 +50,31 @@ type Unit struct {
 // Keys are de-duplicated by slug so a messy linter report cannot produce two
 // children with the same id.
 func LoadUnits(root string, d Discover) ([]Unit, error) {
+	return loadUnits(root, d, defaultCmdTimeout)
+}
+
+func loadUnits(root string, d Discover, cmdTimeout time.Duration) ([]Unit, error) {
 	if strings.TrimSpace(d.From) == "" {
 		return nil, fmt.Errorf("discover.from is empty")
 	}
-	path := d.From
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, d.From)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("discover %s: %w", d.From, err)
+
+	var raw []byte
+	if script, ok := cmdSource(d.From); ok {
+		out, err := runDiscoveryCmd(root, script, cmdTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("discover cmd %q: %w", script, err)
+		}
+		raw = out
+	} else {
+		path := d.From
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, d.From)
+		}
+		var err error
+		raw, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("discover %s: %w", d.From, err)
+		}
 	}
 
 	format := strings.ToLower(strings.TrimSpace(d.Format))
@@ -122,6 +149,48 @@ func LoadUnits(root string, d Discover) ([]Unit, error) {
 		units = append(units, Unit{Key: k, Slug: slug})
 	}
 	return units, nil
+}
+
+// cmdSource reports the shell command in a `cmd:` source.
+func cmdSource(from string) (string, bool) {
+	if !strings.HasPrefix(from, CmdPrefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(from, CmdPrefix)), true
+}
+
+// runDiscoveryCmd executes a discovery command in root and returns its stdout.
+// A non-zero exit is an error: a checker that crashed must not look like a
+// checker that found nothing.
+func runDiscoveryCmd(root, script string, timeout time.Duration) ([]byte, error) {
+	if script == "" {
+		return nil, fmt.Errorf("empty command")
+	}
+	if timeout <= 0 {
+		timeout = defaultCmdTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	cmd.Dir = root
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, fmt.Errorf("timed out after %s", timeout)
+	}
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if len(msg) > 500 {
+			msg = msg[:500] + "..."
+		}
+		if msg == "" {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", err, msg)
+	}
+	return out, nil
 }
 
 // unitSlug is like Slug but also folds dots to dashes, because a child id is a

@@ -72,7 +72,11 @@ func (p *Plan) Validate() []Issue {
 			if strings.TrimSpace(n.Discover.From) == "" {
 				add(n.ID, "discover_no_source", "discover.from is required")
 			}
-			if filepath.IsAbs(n.Discover.From) || strings.Contains(n.Discover.From, "..") {
+			if script, isCmd := cmdSource(n.Discover.From); isCmd {
+				if script == "" {
+					add(n.ID, "discover_empty_cmd", "discover.from is %q with no command", CmdPrefix)
+				}
+			} else if filepath.IsAbs(n.Discover.From) || strings.Contains(n.Discover.From, "..") {
 				add(n.ID, "discover_bad_path", "discover.from %q must be relative to the plan root", n.Discover.From)
 			}
 			switch strings.ToLower(n.Discover.Format) {

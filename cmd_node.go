@@ -21,6 +21,7 @@ type readyNode struct {
 	Role      string          `json:"role"`
 	Harness   string          `json:"harness"`
 	Resolved  string          `json:"resolved,omitempty"`
+	Provider  string          `json:"provider,omitempty"`
 	Model     string          `json:"model,omitempty"`
 	Estimate  string          `json:"estimate"`
 	Deps      []string        `json:"deps,omitempty"`
@@ -69,7 +70,7 @@ func cmdNext(args []string) error {
 		}
 		out = append(out, readyNode{
 			ID: n.ID, Kind: n.Kind, Title: n.Title, Role: n.Role,
-			Harness: n.Harness, Resolved: resolved, Model: n.Model,
+			Harness: n.Harness, Resolved: resolved, Provider: n.Provider, Model: n.Model,
 			Estimate: n.Estimate, Deps: n.Deps,
 			Prompt:    plan.Prompt(p, n, idx),
 			Artifacts: n.Artifacts, Check: n.Check,

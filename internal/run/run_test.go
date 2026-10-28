@@ -192,3 +192,28 @@ func TestDryRunExecutesNothing(t *testing.T) {
 		t.Fatal("dry run created artifacts")
 	}
 }
+
+func TestChildEnvScrubsParentSession(t *testing.T) {
+	t.Setenv("JCODE_RUNTIME_PROVIDER", "openai")
+	t.Setenv("JCODE_SOCKET", "/tmp/x.sock")
+	t.Setenv("JCODE_TUI_INHERITED_THEME", "dark")
+	t.Setenv("KEEP_ME", "yes")
+	env := childEnv()
+	seen := map[string]string{}
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			seen[kv[:i]] = kv[i+1:]
+		}
+	}
+	for _, k := range []string{"JCODE_RUNTIME_PROVIDER", "JCODE_SOCKET", "JCODE_TUI_INHERITED_THEME"} {
+		if _, ok := seen[k]; ok {
+			t.Errorf("%s leaked into the child environment", k)
+		}
+	}
+	if seen["KEEP_ME"] != "yes" {
+		t.Error("childEnv dropped an unrelated variable")
+	}
+	if seen["DAGRUN"] != "1" {
+		t.Error("childEnv did not mark the child as dagrun-spawned")
+	}
+}

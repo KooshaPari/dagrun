@@ -16,12 +16,13 @@ import (
 
 // Spec is one invocation request.
 type Spec struct {
-	Prompt  string
-	Workdir string
-	Model   string
-	Tools   []string
-	Agent   string // forge/helioslite agent id
-	Extra   []string
+	Prompt   string
+	Workdir  string
+	Provider string
+	Model    string
+	Tools    []string
+	Agent    string // forge/helioslite agent id
+	Extra    []string
 }
 
 // Info is what detection learned about one harness.
@@ -65,6 +66,9 @@ func jcodeAdapter(name string) *Adapter {
 			args := []string{"run", "--json"}
 			if s.Workdir != "" {
 				args = append(args, "-C", s.Workdir)
+			}
+			if s.Provider != "" {
+				args = append(args, "-p", s.Provider)
 			}
 			if s.Model != "" {
 				args = append(args, "-m", s.Model)

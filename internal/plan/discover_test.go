@@ -3,6 +3,7 @@ package plan
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -199,5 +200,75 @@ nodes:
 				t.Fatalf("expected %q, got %v", c.code, p.Validate())
 			}
 		})
+	}
+}
+
+func TestLoadUnitsFromCommand(t *testing.T) {
+	root := t.TempDir()
+	units, err := LoadUnits(root, Discover{From: CmdPrefix + "printf 'x.go\\ny.go\\n'"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 2 || units[0].Slug != "x-go" || units[1].Slug != "y-go" {
+		t.Fatalf("unexpected units: %+v", units)
+	}
+}
+
+func TestLoadUnitsCommandSeesRepoFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "a.go", "package a")
+	writeFile(t, root, "sub/b.go", "package b")
+	units, err := LoadUnits(root, Discover{From: CmdPrefix + "find . -name '*.go' | sed 's|^./||'"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("got %d units, want 2: %+v", len(units), units)
+	}
+}
+
+func TestLoadUnitsCommandFailureIsLoud(t *testing.T) {
+	_, err := LoadUnits(t.TempDir(), Discover{From: CmdPrefix + "echo boom >&2; exit 3"})
+	if err == nil {
+		t.Fatal("a failing discovery command must be an error, not an empty work set")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error should carry stderr, got %v", err)
+	}
+}
+
+func TestValidationAcceptsCmdSource(t *testing.T) {
+	yaml := `
+version: 1
+nodes:
+  - id: "1"
+    kind: GATE
+    check: "true"
+    discover: {from: "cmd:printf 'a\\n'", format: lines}
+`
+	p, err := Parse([]byte(yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := p.Validate(); len(issues) != 0 {
+		t.Fatalf("cmd: source rejected: %v", issues)
+	}
+	bad := `
+version: 1
+nodes:
+  - id: "1"
+    kind: GATE
+    check: "true"
+    discover: {from: "cmd:"}
+`
+	p2, _ := Parse([]byte(bad))
+	found := false
+	for _, is := range p2.Validate() {
+		if is.Code == "discover_empty_cmd" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("empty cmd: should be rejected, got %v", p2.Validate())
 	}
 }

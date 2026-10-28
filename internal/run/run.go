@@ -300,9 +300,54 @@ func (e *Executor) setErr(err error) {
 	}
 }
 
-// childEnv gives each child a stable, non-interactive environment.
+// sessionEnvDrop are variables that would bind a child process to the session
+// that launched dagrun instead of making it an independent worker.
+//
+// This is not cosmetic. Observed: a child jcode inherited the parent's
+// JCODE_RUNTIME_PROVIDER/JCODE_ACTIVE_PROVIDER and routed a request to the
+// wrong provider, returning HTTP 400 "unknown model" for a model that works
+// fine when the child starts clean.
+var sessionEnvDrop = map[string]bool{
+	"JCODE_SOCKET":                    true,
+	"JCODE_SESSION_ID":                true,
+	"JCODE_RUNTIME_PROVIDER":          true,
+	"JCODE_ACTIVE_PROVIDER":           true,
+	"JCODE_INITIAL_PROVIDER_EXPLICIT": true,
+	"JCODE_RESUMING":                  true,
+	"JCODE_NON_INTERACTIVE":           true,
+	"CODEX_SESSION_ID":                true,
+	"FORGE_SESSION_ID":                true,
+	"HELIOSLITE_SESSION_ID":           true,
+}
+
+var sessionEnvDropPrefix = []string{"JCODE_TUI_INHERITED_"}
+
+// childEnv gives each child a clean, non-interactive environment: the parent's
+// session and provider bindings are removed so per-node provider/model choices
+// actually take effect.
 func childEnv() []string {
-	env := os.Environ()
-	env = append(env, "DAGRUN=1", "CI=1")
-	return env
+	src := os.Environ()
+	env := make([]string, 0, len(src)+2)
+	for _, kv := range src {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			continue
+		}
+		k := kv[:i]
+		if sessionEnvDrop[k] {
+			continue
+		}
+		drop := false
+		for _, pre := range sessionEnvDropPrefix {
+			if strings.HasPrefix(k, pre) {
+				drop = true
+				break
+			}
+		}
+		if drop {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "DAGRUN=1", "CI=1")
 }
