@@ -59,6 +59,8 @@ func main() {
 		err = cmdMCP(args)
 	case "explain":
 		err = cmdExplain(args)
+	case "viz":
+		err = cmdViz(args)
 	case "version", "--version", "-v":
 		fmt.Printf("dagrun %s\n", Version)
 		return
