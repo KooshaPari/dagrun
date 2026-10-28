@@ -28,6 +28,46 @@ type Input struct {
 	Events []trace.Event
 }
 
+// allNodes returns static nodes plus any materialised by fan_out, in WBS order.
+// Forgetting the dynamic set would silently drop every expanded unit from an
+// export, which is the one thing export must never do.
+func allNodes(in Input) []*plan.Node {
+	static := map[string]bool{}
+	out := make([]*plan.Node, 0, len(in.Plan.Nodes))
+	for _, n := range in.Plan.Nodes {
+		if n == nil {
+			continue
+		}
+		static[n.ID] = true
+		out = append(out, n)
+	}
+	if in.State != nil {
+		for id, n := range in.State.Dynamic {
+			if n == nil || id == "" || static[id] {
+				continue
+			}
+			out = append(out, n)
+		}
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && plan.Less(out[j].ID, out[j-1].ID); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// statusOf returns a node status, tolerating a nil state.
+func statusOf(in Input, id string) string {
+	if in.State == nil {
+		return plan.StatusPending
+	}
+	if ns := in.State.Nodes[id]; ns != nil {
+		return ns.Status
+	}
+	return plan.StatusPending
+}
+
 // JSON renders the raw run document.
 func JSON(in Input) ([]byte, error) {
 	doc := map[string]any{
@@ -104,7 +144,7 @@ func AgilePlus(in Input) ([]byte, error) {
 
 	seq := map[string]int{}
 	next := 1
-	for _, n := range in.Plan.Sorted() {
+	for _, n := range allNodes(in) {
 		if narrativeKinds[n.Kind] {
 			spec.WriteString(narrativeBlock(in, n))
 			continue
@@ -113,7 +153,10 @@ func AgilePlus(in Input) ([]byte, error) {
 		next++
 	}
 
-	for _, n := range in.Plan.Sorted() {
+	for _, n := range allNodes(in) {
+		if n.FanOut != "" {
+			continue // a template is structure, not a deliverable
+		}
 		s, ok := seq[n.ID]
 		if !ok {
 			continue
@@ -227,9 +270,15 @@ func Tracera(in Input) ([]byte, error) {
 		Project:     in.Plan.Run,
 		Run:         in.Plan.Run,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Nodes:       []trNode{},
+		Edges:       []trEdge{},
+		Artifacts:   []trArtifact{},
 		Events:      in.Events,
 	}
-	for _, n := range in.Plan.Sorted() {
+	for _, n := range allNodes(in) {
+		if n.FanOut != "" {
+			continue // structural: expanded into its children
+		}
 		ns := in.State.Nodes[n.ID]
 		node := trNode{
 			ID: n.ID, Type: "task", Kind: n.Kind, Label: n.Title,
@@ -283,15 +332,10 @@ func trStatus(s string) string {
 
 // ------------------------------------------------------------------ helpers
 
-func status(in Input, id string) string {
-	if ns := in.State.Nodes[id]; ns != nil {
-		return ns.Status
-	}
-	return plan.StatusPending
-}
+func status(in Input, id string) string { return statusOf(in, id) }
 
 func allDone(in Input) bool {
-	for _, n := range in.Plan.Nodes {
+	for _, n := range allNodes(in) {
 		if n == nil {
 			continue
 		}
