@@ -55,6 +55,10 @@ func main() {
 		err = cmdExport(args)
 	case "detect":
 		err = cmdDetect(args)
+	case "mcp":
+		err = cmdMCP(args)
+	case "explain":
+		err = cmdExplain(args)
 	case "version", "--version", "-v":
 		fmt.Printf("dagrun %s\n", Version)
 		return
