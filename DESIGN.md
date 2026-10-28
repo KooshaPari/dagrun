@@ -81,7 +81,28 @@ bad printout.
 They never mutate. There is no live coupling to either system, so neither can
 break a run.
 
-### D8. Windows is refused, not degraded
+### D8. Dynamic nodes live in state, not in the plan
+
+A discover node names an artifact that lists units; when that artifact verifies,
+the run gains one child node per unit. Those children are stored in
+`state.Dynamic`, not in the plan, so the plan hash stays a hash of what the agent
+wrote and a rerun cannot be rejected for "changing the plan".
+
+Two consequences that are easy to get wrong:
+
+1. **Expansion must be idempotent per parent, not per child.** Racing executors
+   check one `expanded` marker under the same lock that inserts the children.
+2. **The work set is the source of truth, not the LLM.** Because the work set is
+   an ordinary verified artifact, re-expansion after a crash produces the same
+   nodes. If discovery itself were a side-effecting call, a rerun could expand a
+   different set and silently skip or duplicate work.
+
+A template (`fan_out`) is structure, not work: it is never claimed, and it is
+marked skipped once expanded so status and progress do not count it. A reduce
+(`fan_in`) has its dependency list injected at expansion time, which is why it
+cannot run early.
+
+### D9. Windows is refused, not degraded
 
 `flock` does not exist there. Rather than silently assuming one writer per run,
 the windows build returns an error. macOS and Linux are the targets.

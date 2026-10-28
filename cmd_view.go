@@ -34,16 +34,16 @@ func cmdStatus(args []string) error {
 		return enc.Encode(snap)
 	}
 
+	all := st.All(snap)
 	counts := map[string]int{}
-	for _, n := range p.Nodes {
-		if n == nil {
-			continue
+	for _, n := range all {
+		if ns := snap.Nodes[n.ID]; ns != nil {
+			counts[ns.Status]++
 		}
-		counts[snap.Nodes[n.ID].Status]++
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "run %s   nodes %d\n", p.Run, len(p.Nodes))
+	fmt.Fprintf(&b, "run %s   nodes %d\n", p.Run, len(all))
 	// fixed order so output is diffable
 	for _, s := range []string{plan.StatusDone, plan.StatusRunning, plan.StatusPending, plan.StatusFailed, plan.StatusSkipped, plan.StatusCancelled} {
 		if counts[s] > 0 {
@@ -52,9 +52,11 @@ func cmdStatus(args []string) error {
 	}
 	b.WriteString("\n")
 
-	idx := p.Index()
-	for _, n := range p.Sorted() {
+	for _, n := range all {
 		ns := snap.Nodes[n.ID]
+		if ns == nil {
+			continue
+		}
 		glyph := statusGlyph(ns.Status)
 		extra := ""
 		if ns.Attempts > 1 {
@@ -76,16 +78,21 @@ func cmdStatus(args []string) error {
 		}
 		fmt.Fprintf(&b, "%s %-8s %-9s %-6s %d/%d %s%s\n",
 			glyph, n.ID, n.Kind, n.Estimate, arts, len(n.Artifacts), n.Title, extra)
-		_ = idx
 	}
 
-	done := counts[plan.StatusDone]
+	// Fan-out templates are structure, not work: exclude them from progress.
+	done, total := counts[plan.StatusDone], 0
+	for _, n := range all {
+		if n.FanOut == "" {
+			total++
+		}
+	}
 	pct := 0
-	if len(p.Nodes) > 0 {
-		pct = done * 100 / len(p.Nodes)
+	if total > 0 {
+		pct = done * 100 / total
 	}
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "progress %d/%d (%d%%)\n", done, len(p.Nodes), pct)
+	fmt.Fprintf(&b, "progress %d/%d (%d%%)\n", done, total, pct)
 	fmt.Print(b.String())
 	return nil
 }

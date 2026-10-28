@@ -156,7 +156,7 @@ func checkArtifact(root string, a plan.Artifact) ArtifactResult {
 	res.Files = relAll(root, files)
 	res.Bytes = total
 
-	if total == 0 {
+	if total == 0 && !a.AllowEmpty {
 		res.Code = "empty"
 		res.Detail = "artifact is zero bytes"
 		return res
@@ -168,6 +168,10 @@ func checkArtifact(root string, a plan.Artifact) ArtifactResult {
 	}
 
 	body := combined.String()
+	if total == 0 && len(a.MustContain) == 0 && a.MustMatch == "" {
+		res.OK = true
+		return res
+	}
 	for _, want := range a.MustContain {
 		if !strings.Contains(body, want) {
 			res.Code = "missing_text"

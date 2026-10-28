@@ -55,6 +55,10 @@ type Artifact struct {
 	MustContain []string `yaml:"must_contain,omitempty" json:"must_contain,omitempty"`
 	MustMatch   string   `yaml:"must_match,omitempty" json:"must_match,omitempty"`
 	MinCount    int      `yaml:"min_count,omitempty" json:"min_count,omitempty"`
+	// AllowEmpty accepts a zero-byte artifact. Needed when "no findings" is the
+	// good outcome: a linter that reports nothing still has to produce a file,
+	// and that file is legitimately empty.
+	AllowEmpty bool `yaml:"allow_empty,omitempty" json:"allow_empty,omitempty"`
 }
 
 // Node is one unit of work. It is the scheduling unit and the trace unit.
@@ -74,6 +78,13 @@ type Node struct {
 	Timeout     string     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	MaxAttempts int        `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
 	Optional    bool       `yaml:"optional,omitempty" json:"optional,omitempty"`
+
+	// Dynamic decomposition. Discover turns a verified artifact into a work
+	// set; FanOut marks this node as the template expanded from a parent's
+	// work set; FanIn marks this node as the reduce over a parent's children.
+	Discover *Discover `yaml:"discover,omitempty" json:"discover,omitempty"`
+	FanOut   string    `yaml:"fan_out,omitempty" json:"fan_out,omitempty"`
+	FanIn    string    `yaml:"fan_in,omitempty" json:"fan_in,omitempty"`
 }
 
 // Plan is a whole work DAG.
@@ -85,6 +96,7 @@ type Plan struct {
 	Defaults      Defaults       `yaml:"defaults,omitempty" json:"defaults,omitempty"`
 	RoleCaps      map[string]int `yaml:"role_caps,omitempty" json:"role_caps,omitempty"`
 	MaxParallel   int            `yaml:"max_parallel,omitempty" json:"max_parallel,omitempty"`
+	MaxDynamic    int            `yaml:"max_dynamic,omitempty" json:"max_dynamic,omitempty"`
 	Nodes         []*Node        `yaml:"nodes" json:"nodes"`
 
 	// Root is the absolute directory artifact paths are resolved against. It is
@@ -145,6 +157,9 @@ func (p *Plan) normalize() {
 	}
 	if p.MaxParallel <= 0 {
 		p.MaxParallel = 4
+	}
+	if p.MaxDynamic <= 0 {
+		p.MaxDynamic = 200
 	}
 	for _, n := range p.Nodes {
 		if n == nil {
@@ -247,6 +262,16 @@ func (p *Plan) Index() map[string]*Node {
 		}
 	}
 	return m
+}
+
+// ByID returns one static node by id.
+func (p *Plan) ByID(id string) *Node {
+	for _, n := range p.Nodes {
+		if n != nil && n.ID == id {
+			return n
+		}
+	}
+	return nil
 }
 
 // Sorted returns nodes in natural WBS order (numeric segment wise).

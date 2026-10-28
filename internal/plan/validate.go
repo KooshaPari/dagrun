@@ -61,11 +61,31 @@ func (p *Plan) Validate() []Issue {
 		// A node is only admissible if success can be decided. Anything else
 		// lets a node "finish" without evidence.
 		verifiable := len(n.Artifacts) > 0 || n.Check != ""
-		if !verifiable && !n.Optional {
+		if !verifiable && !n.Optional && n.FanOut == "" {
 			add(n.ID, "unverifiable", "declare artifacts, a check, or mark optional: true")
 		}
-		if n.IsGate() && n.Check == "" {
+		if n.IsGate() && n.Check == "" && n.Discover == nil {
 			add(n.ID, "gate_without_check", "GATE nodes must declare a check")
+		}
+
+		if n.Discover != nil {
+			if strings.TrimSpace(n.Discover.From) == "" {
+				add(n.ID, "discover_no_source", "discover.from is required")
+			}
+			if filepath.IsAbs(n.Discover.From) || strings.Contains(n.Discover.From, "..") {
+				add(n.ID, "discover_bad_path", "discover.from %q must be relative to the plan root", n.Discover.From)
+			}
+			switch strings.ToLower(n.Discover.Format) {
+			case "", "lines", "json", "jsonl":
+			default:
+				add(n.ID, "discover_bad_format", "unknown format %q (want json, jsonl, or lines)", n.Discover.Format)
+			}
+			if n.Discover.Max < 0 {
+				add(n.ID, "discover_bad_max", "max must be >= 0")
+			}
+		}
+		if n.FanOut != "" && n.FanIn != "" {
+			add(n.ID, "fan_both", "a node cannot be both a fan_out template and a fan_in reduce")
 		}
 
 		for _, a := range n.Artifacts {
@@ -106,6 +126,20 @@ func (p *Plan) Validate() []Issue {
 				add(n.ID, "duplicate_dep", "lists dependency %q twice", d)
 			}
 			seenDep[d] = true
+		}
+
+		switch {
+		case n.FanOut != "":
+			if !seen[n.FanOut] {
+				add(n.ID, "fan_out_unknown", "fan_out references unknown node %q", n.FanOut)
+			}
+		case n.FanIn != "":
+			parent := p.ByID(n.FanIn)
+			if parent == nil {
+				add(n.ID, "fan_in_unknown", "fan_in references unknown node %q", n.FanIn)
+			} else if parent.Discover == nil {
+				add(n.ID, "fan_in_not_discover", "fan_in parent %q declares no discover", n.FanIn)
+			}
 		}
 	}
 

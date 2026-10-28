@@ -56,6 +56,16 @@ func TestArtifactPredicates(t *testing.T) {
 	}
 }
 
+func TestAllowEmptyAcceptsAZeroByteReport(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "artifacts/none.txt", "")
+	n := &plan.Node{ID: "x", Kind: "GATE",
+		Artifacts: []plan.Artifact{{Path: "artifacts/none.txt", AllowEmpty: true}}}
+	if rep := Node(context.Background(), root, n); !rep.OK {
+		t.Fatalf("allow_empty should accept a zero-byte report: %s", rep.Reason)
+	}
+}
+
 func TestEmptyArtifactIsNotProof(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "artifacts/empty.md", "")

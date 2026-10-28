@@ -51,7 +51,6 @@ type Executor struct {
 	st       *store.Store
 	tr       *trace.Writer
 	opt      Options
-	idx      map[string]*plan.Node
 	active   int64
 	wg       sync.WaitGroup
 	errMu    sync.Mutex
@@ -69,7 +68,7 @@ func New(st *store.Store, tr *trace.Writer, opt Options) *Executor {
 	if opt.Out == nil {
 		opt.Out = os.Stderr
 	}
-	return &Executor{st: st, tr: tr, opt: opt, idx: st.Plan().Index()}
+	return &Executor{st: st, tr: tr, opt: opt}
 }
 
 // Loop schedules work until every node is terminal or nothing can progress.
@@ -90,14 +89,31 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 			return Summary{}, err
 		}
 
+		// A discover node that has verified turns its work set into real nodes.
+		// Expansion is idempotent per parent, so several executors can call it.
+		// Always re-snapshot afterwards: expansion mutates the run even when it
+		// materialises zero children (an expanded marker, a skipped template).
+		if _, xerr := e.expand(ctx, snap); xerr != nil {
+			e.setErr(xerr)
+		} else if fresh, serr := e.st.Snapshot(); serr == nil {
+			snap = fresh
+		}
+		idx := indexAll(e.st, snap)
+
 		launched := 0
-		for _, n := range e.st.Plan().Sorted() {
+		for _, n := range e.st.All(snap) {
 			if atomic.LoadInt64(&e.active) >= int64(e.opt.Workers) {
 				break
+			}
+			if n.FanOut != "" {
+				continue // a template is executed as its children, never itself
 			}
 			ns := snap.Nodes[n.ID]
 			if ns == nil || ns.Status != plan.StatusPending {
 				continue
+			}
+			if n.FanIn != "" && !store.Expanded(snap, n.FanIn) {
+				continue // the reduce cannot run before the map has expanded
 			}
 			if !e.st.DepsDone(snap, n.ID) {
 				continue
@@ -129,7 +145,7 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 			go func(node *plan.Node, epoch int64) {
 				defer e.wg.Done()
 				defer atomic.AddInt64(&e.active, -1)
-				e.execute(ctx, node, epoch)
+				e.execute(ctx, node, epoch, idx)
 			}(n, claim.Epoch)
 			_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID, Event: "node.claim", Epoch: claim.Epoch})
 			if e.opt.Once {
@@ -166,9 +182,25 @@ func (e *Executor) settle(ctx context.Context) bool {
 		return true
 	}
 	changed := false
-	for _, n := range e.st.Plan().Sorted() {
+	for _, n := range e.st.All(snap) {
+		if n.FanOut != "" {
+			continue
+		}
 		ns := snap.Nodes[n.ID]
 		if ns == nil || ns.Status != plan.StatusPending {
+			continue
+		}
+		if n.FanIn != "" && !store.Expanded(snap, n.FanIn) {
+			// The discovery parent never produced a work set.
+			switch ps := snap.Nodes[n.FanIn]; {
+			case ps == nil:
+				e.finishDirect(n, plan.StatusFailed, "fan_in parent "+n.FanIn+" is not in this run")
+			case ps.Status == plan.StatusFailed || ps.Status == plan.StatusCancelled:
+				e.finishDirect(n, plan.StatusFailed, "fan_in parent "+n.FanIn+" is "+ps.Status)
+			case ps.Status == plan.StatusDone:
+				e.finishDirect(n, plan.StatusSkipped, "work set is empty")
+			}
+			changed = true
 			continue
 		}
 		if e.adopt(ctx, n) {
@@ -239,7 +271,7 @@ func (e *Executor) summarize() Summary {
 		return Summary{}
 	}
 	var s Summary
-	for _, n := range e.st.Plan().Sorted() {
+	for _, n := range e.st.All(snap) {
 		ns := snap.Nodes[n.ID]
 		if ns == nil {
 			continue

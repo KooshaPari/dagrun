@@ -1,0 +1,63 @@
+# Fan-out: a tool produces the work list, dagrun produces the nodes.
+#
+# This is the CRun shape, generalised: run a checker, parse its output into a
+# work set, then one node per unit, then a single reduce that asserts the whole
+# set is done. The number of nodes is not known at plan time.
+#
+#   dagrun plan examples/lint-fanout/plan.yaml
+#   dagrun run --exec-template 'sh examples/fake-agent.sh {prompt}'
+#
+# `dagrun status` prints the expanded children as 1.2/<slug>.
+
+version: 1
+run: gofmt-sweep
+intent: |
+  Bring every unformatted Go file in this tree to gofmt-clean, one file per
+  node, with a single gate that asserts the whole set was handled. Zero
+  unformatted files is a successful run, not an error.
+
+artifacts_root: artifacts
+max_parallel: 4
+max_dynamic: 50
+
+nodes:
+  # --- discover: the work list is an artifact, so it is verified and reused ---
+  - id: "1.1"
+    kind: GATE
+    role: discover
+    title: list unformatted Go files
+    estimate: 1m
+    check: "mkdir -p artifacts && gofmt -l . > artifacts/unformatted.txt"
+    artifacts:
+      - path: artifacts/unformatted.txt
+        # no findings is the good outcome, so the file may be empty
+        allow_empty: true
+    discover:
+      from: artifacts/unformatted.txt
+      format: lines
+      max: 50
+
+  # --- map: one node per unit, ids become 1.2/<slug>, contracts substituted ---
+  - id: "1.2"
+    kind: CODE
+    role: impl
+    title: "handle {{unit}}"
+    estimate: 2m
+    fan_out: "1.1"
+    artifacts:
+      - path: "artifacts/gofmt/{{slug}}.txt"
+        min_bytes: 1
+    # A real agent would also run `gofmt -w {{unit}}`. The strict form of this
+    # check is:
+    #   gofmt -l {{unit}} | grep -q . && exit 1 || exit 0
+    # which fails the node while the file is still unformatted.
+    check: "test -f {{unit}}"
+
+  # --- reduce: depends on every child, so it cannot run early ---
+  - id: "1.3"
+    kind: GATE
+    role: gate
+    title: every unformatted file was handled
+    estimate: 1m
+    fan_in: "1.1"
+    check: "test $(ls artifacts/gofmt/*.txt 2>/dev/null | wc -l | tr -d ' ') -eq $(wc -l < artifacts/unformatted.txt | tr -d ' ')"

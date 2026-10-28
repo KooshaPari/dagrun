@@ -147,10 +147,11 @@ All predicates must hold:
 
 1. the path exists (globs allowed, with `min_count`)
 2. it is a regular file and is not zero bytes
-3. `min_bytes`, if set
-4. every string in `must_contain` appears
-5. `must_match` regex matches
-6. `check`, if set, exits 0 (run with `sh -c` in `workdir`, process group killed on timeout)
+3. it is not zero bytes, unless `allow_empty: true` (a "no findings" report)
+4. `min_bytes`, if set
+5. every string in `must_contain` appears
+6. `must_match` regex matches
+7. `check`, if set, exits 0 (run with `sh -c` in `workdir`, process group killed on timeout)
 
 A node with no `artifacts` and no `check` is **rejected at plan time** unless
 marked `optional: true`. That is the whole safety property: you cannot have a
@@ -159,6 +160,71 @@ node that "succeeds" without evidence.
 Structural validation (before anything runs) catches: cycles, unknown and
 duplicate deps, duplicate ids, unknown kinds, absolute or escaping paths, bad
 regexes, unverifiable nodes, `GATE` without `check`.
+
+## Fan-out: let a tool decide how many nodes there are
+
+Some work only exists at runtime: how many files have lint findings, how many
+tests fail, how many endpoints need docs. A static DAG forces the planning agent
+to enumerate those by hand. Instead, one node discovers a work set and a
+template expands into one node per unit.
+
+```yaml
+nodes:
+  - id: "1.1"                     # discover: the work list is an artifact
+    kind: GATE
+    check: "mkdir -p artifacts && gofmt -l . > artifacts/unformatted.txt"
+    artifacts:
+      - path: artifacts/unformatted.txt
+        allow_empty: true         # "no findings" is a success
+    discover:
+      from: artifacts/unformatted.txt
+      format: lines               # lines | json | jsonl
+      max: 50
+
+  - id: "1.2"                     # map: one node per unit
+    kind: CODE
+    fan_out: "1.1"
+    title: "handle {{unit}}"
+    artifacts:
+      - path: "artifacts/gofmt/{{slug}}.txt"
+    check: "test -f {{unit}}"
+
+  - id: "1.3"                     # reduce: depends on every child
+    kind: GATE
+    fan_in: "1.1"
+    check: "test $(ls artifacts/gofmt/*.txt | wc -l) -eq $(wc -l < artifacts/unformatted.txt)"
+```
+
+`1.1` runs, its artifact verifies, and one child appears per line
+(`1.2/<slug>`) with `{{unit}}` and `{{slug}}` substituted through the template.
+Children are ordinary nodes — own lease, artifacts, retries, trace events — so
+caps still apply and `max_dynamic` bounds the explosion. `1.3` cannot run until
+every child is terminal.
+
+Properties worth knowing:
+
+- The work set is an artifact, so it is verified and **adopted** like anything
+  else: a rerun re-expands the same set from the same file, never a fresh one.
+- Expansion is idempotent per parent, so N executors racing cannot double-add.
+- Zero units is a legitimate result; the reduce still runs and decides, which
+  keeps "found nothing" distinguishable from "never ran".
+- A malformed work set fails the discover node instead of silently expanding
+  nothing.
+- Templates are structure, not work: they are marked skipped and excluded from
+  progress.
+
+For a JSON work set, point `from` at the tool's own output and name the field:
+
+```yaml
+    discover:
+      from: artifacts/ruff.json
+      format: json
+      key: filename
+```
+
+This is the shape CRun used (lint -> per-file findings -> one agent per file),
+generalised: the discovery step is any command, the work set is any artifact,
+and the reduce is a normal node with a normal contract.
 
 ## CLI
 

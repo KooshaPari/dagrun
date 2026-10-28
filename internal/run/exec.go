@@ -19,7 +19,7 @@ import (
 	"github.com/KooshaPari/dagrun/internal/verify"
 )
 
-func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64) {
+func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx map[string]*plan.Node) {
 	start := time.Now()
 	if n.Check != "" && len(n.Artifacts) == 0 {
 		rep := verify.Node(ctx, e.st.Root(), n)
@@ -31,7 +31,7 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64) {
 	if n.Workdir != "" {
 		workdir = filepath.Join(e.st.Root(), n.Workdir)
 	}
-	prompt := plan.Prompt(e.st.Plan(), n, e.idx)
+	prompt := plan.Prompt(e.st.Plan(), n, idx)
 
 	name, args, useStdin, err := e.command(n, prompt, workdir)
 	if err != nil {

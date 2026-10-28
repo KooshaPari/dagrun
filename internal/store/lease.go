@@ -12,9 +12,66 @@ import (
 	"github.com/KooshaPari/dagrun/internal/verify"
 )
 
+// Resolve returns a node by id, preferring a runtime-materialised one over the
+// static plan so a fan_out child or an expanded fan_in reduce is visible to
+// every check that walks the graph.
+func Resolve(st *State, id string) *plan.Node {
+	if st != nil && st.Dynamic != nil {
+		if n, ok := st.Dynamic[id]; ok && n != nil {
+			return n
+		}
+	}
+	return nil
+}
+
+// All returns static and dynamic nodes in WBS order.
+func (s *Store) All(st *State) []*plan.Node {
+	out := append([]*plan.Node(nil), s.plan.Nodes...)
+	static := make(map[string]bool, len(s.plan.Nodes))
+	for _, n := range s.plan.Nodes {
+		if n != nil {
+			static[n.ID] = true
+		}
+	}
+	for id, n := range st.Dynamic {
+		// A fan_in node is materialised only to grow its dependency list; its
+		// static declaration is still the node of record.
+		if n == nil || id == "" || static[id] {
+			continue
+		}
+		out = append(out, n)
+	}
+	return orderNodes(out)
+}
+
+func orderNodes(nodes []*plan.Node) []*plan.Node {
+	out := make([]*plan.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if n != nil {
+			out = append(out, n)
+		}
+	}
+	// insertion sort by natural id order: n is small and this keeps the
+	// dependency on plan.Less explicit rather than pulling in sort twice
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && plan.Less(out[j].ID, out[j-1].ID); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// lookup resolves id against the plan and the run's dynamic set.
+func (s *Store) lookup(st *State, id string) *plan.Node {
+	if n := Resolve(st, id); n != nil {
+		return n
+	}
+	return s.plan.ByID(id)
+}
+
 // DepsDone reports whether every dependency of a node is done or skipped.
 func (s *Store) DepsDone(st *State, nodeID string) bool {
-	n := s.node(nodeID)
+	n := s.lookup(st, nodeID)
 	if n == nil {
 		return false
 	}
@@ -31,12 +88,7 @@ func (s *Store) DepsDone(st *State, nodeID string) bool {
 }
 
 func (s *Store) node(id string) *plan.Node {
-	for _, n := range s.plan.Nodes {
-		if n != nil && n.ID == id {
-			return n
-		}
-	}
-	return nil
+	return s.plan.ByID(id)
 }
 
 // Claim atomically takes a node for owner. It enforces dependency order,
@@ -62,7 +114,7 @@ func (s *Store) Claim(nodeID, owner string, ttl time.Duration, now time.Time) (C
 				return nil
 			}
 		}
-		n := s.node(nodeID)
+		n := s.lookup(st, nodeID)
 		if n == nil {
 			out.Reason = "node not in plan"
 			return nil
@@ -104,7 +156,9 @@ func (s *Store) capBlocked(st *State, n *plan.Node, now time.Time) string {
 			continue
 		}
 		running++
-		byRole[s.Role(id)]++
+		if node := s.lookup(st, id); node != nil {
+			byRole[node.Role]++
+		}
 	}
 	if s.plan.MaxParallel > 0 && running >= s.plan.MaxParallel {
 		return fmt.Sprintf("max_parallel %d reached", s.plan.MaxParallel)

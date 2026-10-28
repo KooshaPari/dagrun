@@ -46,6 +46,13 @@ type State struct {
 	CreatedAt time.Time             `json:"created_at"`
 	UpdatedAt time.Time             `json:"updated_at"`
 	Nodes     map[string]*NodeState `json:"nodes"`
+	// Dynamic holds nodes materialised at runtime by fan_out. They are not part
+	// of the plan, so the plan hash stays static and a rerun re-expands the
+	// same set from the same verified work set.
+	Dynamic map[string]*plan.Node `json:"dynamic,omitempty"`
+	// Expanded records that a discover node has already been expanded, so an
+	// empty work set is not retried on every scheduler tick.
+	Expanded map[string]bool `json:"expanded,omitempty"`
 }
 
 // Store is a handle to one run directory.
@@ -114,6 +121,8 @@ func (s *Store) freshState() *State {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Nodes:     make(map[string]*NodeState, len(s.plan.Nodes)),
+		Dynamic:   map[string]*plan.Node{},
+		Expanded:  map[string]bool{},
 	}
 	for _, n := range s.plan.Nodes {
 		if n != nil {
@@ -134,6 +143,12 @@ func (s *Store) readState() (*State, error) {
 	}
 	if st.Nodes == nil {
 		st.Nodes = map[string]*NodeState{}
+	}
+	if st.Dynamic == nil {
+		st.Dynamic = map[string]*plan.Node{}
+	}
+	if st.Expanded == nil {
+		st.Expanded = map[string]bool{}
 	}
 	return &st, nil
 }
@@ -207,6 +222,14 @@ func (s *Store) Snapshot() (*State, error) {
 		for k, v := range st.Nodes {
 			c := *v
 			cp.Nodes[k] = &c
+		}
+		cp.Dynamic = make(map[string]*plan.Node, len(st.Dynamic))
+		for k, v := range st.Dynamic {
+			cp.Dynamic[k] = v.Clone()
+		}
+		cp.Expanded = make(map[string]bool, len(st.Expanded))
+		for k, v := range st.Expanded {
+			cp.Expanded[k] = v
 		}
 		out = &cp
 		return nil

@@ -306,6 +306,10 @@ features make that trust cheaper to earn.
 | 2 | **2.2 worktree isolation** | the actual N×M failure mode. Two IMPL nodes on one checkout collide; `workdir` alone does not prevent it. This is the difference between "safe in theory" and "safe with 4 workers". |
 | 3 | **8.1 MCP server** | removes the last reason for an agent to hand-roll dispatch. `next`/`claim`/`done` as tools is smaller than any wrapper and makes dagrun the default path instead of the clever one. |
 
+Delivered since the last revision: **11.0 dynamic decomposition** (discover +
+fan_out + fan_in), which was not on the board when this roadmap was first
+written — see the epic for the CRun lineage.
+
 Runner-up: **4.4 + 4.1** (explain + kind-aware predicates). Cheap, and it turns
 every failure into a fix instruction, which is what makes an unattended run
 recoverable.
