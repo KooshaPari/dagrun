@@ -50,6 +50,14 @@ func (p *Plan) Validate() []Issue {
 		if _, err := time.ParseDuration(n.Timeout); err != nil || n.Timeout == "" {
 			add(n.ID, "bad_timeout", "timeout %q is not a duration", n.Timeout)
 		}
+		switch n.Isolation {
+		case "", "worktree":
+		default:
+			add(n.ID, "bad_isolation", "unknown isolation %q (want \"\" or worktree)", n.Isolation)
+		}
+		if n.Isolation == "worktree" && n.Workdir != "" {
+			add(n.ID, "isolation_conflict", "isolation: worktree sets the working directory; drop workdir")
+		}
 		if n.Workdir != "" {
 			if filepath.IsAbs(n.Workdir) {
 				add(n.ID, "bad_workdir", "workdir must be relative to the plan root")

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -246,10 +247,20 @@ func harnessName(n *plan.Node) string {
 // adopt accepts a node whose artifacts already satisfy the contract. This is
 // the duplicate-work guard: re-running the tool never redoes finished nodes.
 func (e *Executor) adopt(ctx context.Context, n *plan.Node) bool {
-	if !verify.Satisfied(ctx, e.st.Root(), n) {
+	root := e.st.Root()
+	if n.Isolation == IsolationWorktree {
+		// Only adopt an isolated node if its worktree already exists; otherwise
+		// there is nothing on disk to prove and it must actually run.
+		wt := filepath.Join(e.st.Dir(), "worktrees", trace.Name(n.ID))
+		if !isWorktree(wt) {
+			return false
+		}
+		root = wt
+	}
+	if !verify.Satisfied(ctx, root, n) {
 		return false
 	}
-	rep := verify.Node(ctx, e.st.Root(), n)
+	rep := verify.Node(ctx, root, n)
 	if err := e.st.Force(n.ID, plan.StatusDone, "adopted: artifacts already satisfy the contract", &rep, time.Now()); err != nil {
 		return false
 	}

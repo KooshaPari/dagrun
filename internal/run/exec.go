@@ -21,15 +21,34 @@ import (
 
 func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx map[string]*plan.Node) {
 	start := time.Now()
-	if n.Check != "" && len(n.Artifacts) == 0 {
-		rep := verify.Node(ctx, e.st.Root(), n)
-		e.settleNode(n, epoch, rep, 0, start)
-		return
-	}
 
+	// vroot is where this node's artifacts are proven. It is the plan root for a
+	// shared checkout and the node's own worktree when it is isolated.
+	vroot := e.st.Root()
 	workdir := e.st.Root()
 	if n.Workdir != "" {
 		workdir = filepath.Join(e.st.Root(), n.Workdir)
+	}
+
+	if n.Isolation == IsolationWorktree {
+		wt, err := ensureWorktree(e.st.Root(), e.st.Dir(), e.st.Plan().Run, n)
+		if err != nil {
+			e.settleNode(n, epoch, verify.Report{NodeID: n.ID, Reason: err.Error()}, -1, start)
+			return
+		}
+		workdir, vroot = wt.Path, wt.Path
+		if err := e.st.Annotate(n.ID, wt.Path, wt.Branch); err != nil {
+			e.setErr(err)
+		}
+		_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID,
+			Event: "node.worktree", Epoch: epoch, Message: wt.Branch})
+		fmt.Fprintf(e.opt.Out, "%s isolated on %s\n", n.ID, wt.Branch)
+	}
+
+	if n.Check != "" && len(n.Artifacts) == 0 {
+		rep := verify.Node(ctx, vroot, n)
+		e.settleNode(n, epoch, rep, 0, start)
+		return
 	}
 	prompt := plan.Prompt(e.st.Plan(), n, idx)
 
@@ -95,7 +114,7 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 	default:
 	}
 
-	rep := verify.Node(ctx, e.st.Root(), n)
+	rep := verify.Node(ctx, vroot, n)
 	e.settleNode(n, epoch, rep, exitCode, start)
 }
 

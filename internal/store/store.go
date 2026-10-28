@@ -34,6 +34,8 @@ type NodeState struct {
 	StartedAt  time.Time      `json:"started_at,omitempty"`
 	FinishedAt time.Time      `json:"finished_at,omitempty"`
 	ExitCode   int            `json:"exit_code,omitempty"`
+	Worktree   string         `json:"worktree,omitempty"`
+	Branch     string         `json:"branch,omitempty"`
 	LastError  string         `json:"last_error,omitempty"`
 	Verify     *verify.Report `json:"verify,omitempty"`
 }

@@ -286,6 +286,39 @@ Designed for N agents × M DAG-spawned workers on one repository.
 - **Children run in their own process group**; a timeout or a lost lease kills
   the whole subtree.
 
+### Isolation for parallel edits
+
+Two nodes writing the same checkout collide, and fan-out makes several IMPL
+nodes in flight the normal case. Set `isolation: worktree` on such a node and it
+runs in its own `git worktree` on its own branch:
+
+```yaml
+  - id: "2.2"
+    kind: IMPL
+    isolation: worktree
+    artifacts: [{path: src/store/lease.go, min_bytes: 800}]
+    check: "go test ./internal/store/"
+```
+
+What that buys, precisely:
+
+- the child's working directory is `.dagrun/worktrees/<node>`, on branch
+  `dagrun/<run>/<node>`;
+- **its artifacts are verified there**, not in the shared tree, so "done" means
+  the edit exists on that branch;
+- the main checkout is never switched, and parallel nodes cannot see each
+  other's half-finished files;
+- the worktree is reused on retry (a previous attempt's work is not discarded),
+  and the branch is left in place so you or a later node can merge it.
+
+`dagrun status` shows the branch next to the node. `isolation: worktree` is
+mutually exclusive with `workdir`, and it requires the plan root to be a git
+repository.
+
+Merge-back is deliberately manual: dagrun does not fast-forward your branch for
+you, because "which branch wins" is a decision the DAG should not make on its
+own.
+
 Verified in the test suite: 16 goroutines and 8 separate OS processes racing one
 claim yield exactly one winner; lease expiry reclaims; stale-epoch writes are
 rejected; `-race` is clean.

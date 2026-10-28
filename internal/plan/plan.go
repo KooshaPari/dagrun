@@ -64,22 +64,25 @@ type Artifact struct {
 
 // Node is one unit of work. It is the scheduling unit and the trace unit.
 type Node struct {
-	ID          string     `yaml:"id" json:"id"`
-	Kind        string     `yaml:"kind" json:"kind"`
-	Title       string     `yaml:"title,omitempty" json:"title,omitempty"`
-	Deps        []string   `yaml:"deps,omitempty" json:"deps,omitempty"`
-	Estimate    string     `yaml:"estimate,omitempty" json:"estimate,omitempty"`
-	Role        string     `yaml:"role,omitempty" json:"role,omitempty"`
-	Harness     string     `yaml:"harness,omitempty" json:"harness,omitempty"`
-	Provider    string     `yaml:"provider,omitempty" json:"provider,omitempty"`
-	Model       string     `yaml:"model,omitempty" json:"model,omitempty"`
-	Prompt      string     `yaml:"prompt,omitempty" json:"prompt,omitempty"`
-	Artifacts   []Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
-	Check       string     `yaml:"check,omitempty" json:"check,omitempty"`
-	Workdir     string     `yaml:"workdir,omitempty" json:"workdir,omitempty"`
-	Timeout     string     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	MaxAttempts int        `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
-	Optional    bool       `yaml:"optional,omitempty" json:"optional,omitempty"`
+	ID        string     `yaml:"id" json:"id"`
+	Kind      string     `yaml:"kind" json:"kind"`
+	Title     string     `yaml:"title,omitempty" json:"title,omitempty"`
+	Deps      []string   `yaml:"deps,omitempty" json:"deps,omitempty"`
+	Estimate  string     `yaml:"estimate,omitempty" json:"estimate,omitempty"`
+	Role      string     `yaml:"role,omitempty" json:"role,omitempty"`
+	Harness   string     `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Provider  string     `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Model     string     `yaml:"model,omitempty" json:"model,omitempty"`
+	Prompt    string     `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Artifacts []Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	Check     string     `yaml:"check,omitempty" json:"check,omitempty"`
+	Workdir   string     `yaml:"workdir,omitempty" json:"workdir,omitempty"`
+	// Isolation is "" (shared checkout) or "worktree" (its own git worktree and
+	// branch). Worktree nodes resolve artifacts inside their own checkout.
+	Isolation   string `yaml:"isolation,omitempty" json:"isolation,omitempty"`
+	Timeout     string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	MaxAttempts int    `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
+	Optional    bool   `yaml:"optional,omitempty" json:"optional,omitempty"`
 
 	// Dynamic decomposition. Discover turns a verified artifact into a work
 	// set; FanOut marks this node as the template expanded from a parent's

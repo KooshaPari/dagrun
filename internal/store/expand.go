@@ -96,3 +96,16 @@ func Children(st *State, parentID string) []string {
 	}
 	return out
 }
+
+// Annotate records where a node ran when it was isolated in its own worktree.
+func (s *Store) Annotate(nodeID, worktree, branch string) error {
+	return s.With(func(st *State) error {
+		ns := st.Nodes[nodeID]
+		if ns == nil {
+			return nil
+		}
+		ns.Worktree = worktree
+		ns.Branch = branch
+		return nil
+	})
+}

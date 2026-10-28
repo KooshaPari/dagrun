@@ -36,12 +36,15 @@ Gate: an unattended overnight run finishes or fails with a reason the operator
 can act on without reading logs.
 
 ```
-1.1 Real-harness proof across families                         NEXT
+1.1 Real-harness proof across families                         PARTIAL 3/5
     1.1.1 jcode: one RESEARCH node, verified, token usage recorded
     1.1.2 codex: one IMPL node, sandbox=workspace-write, verified
     1.1.3 forge + helioslite: one DOC node via -p; confirm exit-code semantics
     1.1.4 kcode: parity check against jcode (fork drift)
-    GATE: 4 families each produce a verified artifact from a real prompt
+    ▸ jcode PASS 18.5s · codex PASS 22.4s · forge PASS 12.0s
+    ▸ kcode BLOCKED(external: no credentials in the fork's store)
+    ▸ helioslite BLOCKED(external: needs a pty, then still prompts)
+    ▸ see docs/harness-proof.md
 
 1.2 Cost and time accounting                                  LATER
     1.2.1 extract usage from harness JSON output into NodeState

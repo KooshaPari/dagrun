@@ -65,6 +65,9 @@ func cmdStatus(args []string) error {
 		if ns.Status == plan.StatusRunning && ns.Owner != "" {
 			extra += " owner=" + ns.Owner
 		}
+		if ns.Branch != "" {
+			extra += " on " + ns.Branch
+		}
 		if ns.LastError != "" && (ns.Status == plan.StatusFailed || ns.Status == plan.StatusPending) {
 			extra += " " + truncate(ns.LastError, 70)
 		}
