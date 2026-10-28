@@ -18,8 +18,8 @@ closed. The single open validation cell is a live harness spawn.
 ## Epics
 
 ```
-1.0  VERIFIED AUTONOMY ......................... LATER   trust an unattended run
-2.0  FLEET CONCURRENCY ......................... NEXT    20 agents x 4 workers, one repo
+1.0  VERIFIED AUTONOMY ......................... PARTIAL trust an unattended run
+2.0  FLEET CONCURRENCY ......................... PARTIAL 20 agents x 4 workers, one repo
 3.0  PLAN AUTHORING ............................ NEXT    intent -> validated DAG
 4.0  CONTRACTS THAT CATCH SLOP ................. NEXT    beyond exists-and-nonempty
 5.0  TRACE AS A PRODUCT ........................ LATER   Tracera natively, humans fast
@@ -78,11 +78,14 @@ corruption, zero duplicate node executions.
     2.1.3 lock backoff + contention report
     GATE: measured p95 lock wait under the target load
 
-2.2 Working-tree isolation                                    NEXT
-    2.2.1 isolation: worktree -> git worktree create/remove per node
-    2.2.2 merge-back policy: fast-forward only, or leave branch
-    2.2.3 plan-time rejection when two nodes declare overlapping file_scope
-    GATE: two IMPL nodes edit in parallel without touching each other
+2.2 Working-tree isolation                                    DONE (2.2.1-2.2.2)
+    2.2.1 isolation: worktree -> git worktree + branch per node   DONE
+    2.2.2 merge-back policy: leave the branch (manual, by design) DONE
+    2.2.3 plan-time rejection when two nodes declare overlapping
+          file_scope                                             LATER
+    ▸ GATE: two IMPL nodes edit in parallel without touching each other   PASS
+      artifacts verified inside the worktree; shared checkout untouched;
+      branch reused, never reset
 
 2.3 Admission control                                         LATER
     2.3.1 role -> provider map; cap per provider, not just per role
