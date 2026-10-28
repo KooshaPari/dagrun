@@ -1,0 +1,106 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/KooshaPari/dagrun/internal/run"
+	"github.com/KooshaPari/dagrun/internal/trace"
+)
+
+func cmdRun(args []string) error {
+	var dir string
+	var jsonOut bool
+	flags, _ := splitArgs(args)
+	fs := flagSet("run", &dir, &jsonOut)
+	workers := fs.Int("workers", 0, "concurrent nodes in this process")
+	once := fs.Bool("once", false, "start at most one node then exit")
+	dry := fs.Bool("dry-run", false, "report what would run, execute nothing")
+	owner := fs.String("owner", "", "owner identity for leases")
+	lease := fs.Duration("lease", 2*time.Minute, "lease duration")
+	tmpl := fs.String("exec-template", "", "fallback command template")
+	tools := fs.String("tools", "", "comma-separated tool allow-list")
+	verbose := fs.Bool("verbose", false, "log spawns and child output paths")
+	if err := fs.Parse(flags); err != nil {
+		return err
+	}
+
+	p, st, _, err := openRun(dir)
+	if err != nil {
+		return err
+	}
+	if *workers <= 0 {
+		*workers = p.MaxParallel
+	}
+	if *workers <= 0 {
+		*workers = 4
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	opt := run.Options{
+		Workers:      *workers,
+		Owner:        ownerOrDefault(*owner),
+		Lease:        *lease,
+		Once:         *once,
+		DryRun:       *dry,
+		Verbose:      *verbose,
+		ExecTemplate: *tmpl,
+		Tools:        splitList(*tools),
+		Out:          os.Stderr,
+	}
+	tr := trace.New(st.Dir() + "/trace")
+	ex := run.New(st, tr, opt)
+	summary, runErr := ex.Loop(ctx)
+
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(summary)
+	} else {
+		fmt.Printf("\nrun %s: done=%d failed=%d skipped=%d pending=%d\n",
+			p.Run, summary.Done, summary.Failed, summary.Skipped, summary.Pending)
+		if len(summary.Remaining) > 0 {
+			fmt.Printf("remaining: %s\n", strings.Join(summary.Remaining, ", "))
+		}
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if summary.Failed > 0 || summary.Pending > 0 {
+		return fmt.Errorf("%d node(s) did not complete", summary.Failed+summary.Pending)
+	}
+	return nil
+}
+
+func ownerOrDefault(owner string) string {
+	if owner != "" {
+		return owner
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "host"
+	}
+	return fmt.Sprintf("%s.%d.%d", host, os.Getpid(), time.Now().UnixNano()%1000)
+}
+
+func splitList(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
