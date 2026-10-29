@@ -106,11 +106,13 @@ Gate: an agent goes from one paragraph of intent to a validated plan without
 hand-writing YAML.
 
 ```
-3.1 Draft from intent                                         NEXT
-    3.1.1 dagrun draft --intent FILE emits a taxonomy-complete skeleton
-    3.1.2 always emit INTENT, SPEC, TEST, GATE; infer the rest
-    3.1.3 --harness lets a model propose the decomposition; dagrun validates
-    GATE: paragraph in, runnable plan out
+3.1 Draft from intent                                     DONE
+    3.1.1 `draft --intent FILE` emits a taxonomy-complete skeleton    DONE
+    3.1.2 always emit INTENT, SPEC, TEST, GATE; infer the rest        DONE
+    3.1.3 a model proposes the decomposition; dagrun validates         DONE
+    GATE: paragraph in, runnable plan out                           PASS
+    note: the emitted YAML is re-parsed and re-validated before it is
+    written, so a draft that does not validate is never handed over
 
 3.2 Plan linter                                               NEXT
     3.2.1 actionable messages + --fix for mechanical issues
@@ -205,27 +207,29 @@ Gate: pasting one document into nine artifacts does not pass.
 ## 7.0 MULTI-REPO INTENTS
 
 ```
-7.1 Sub-plans                                                 LATER
-    7.1.1 include: namespaced node ids across plan dirs
-    7.1.2 cross-plan dependency validation at load
-    7.1.3 per-plan artifact roots
+7.1 Sub-plans                                            PARTIAL
+    7.1.1 namespaced node ids across plan dirs              DONE
+    7.1.2 cross-plan dependency resolution                  DONE
+    7.1.3 per-plan artifact roots                           LATER
+    7.1.4 cross-repo SCHEDULING (one executor, many repos) LATER
     GATE: repo B's node can wait on repo A's node
 
-7.2 Workspace manifest                                        LATER
-    7.2.1 dagrun.workspace.yaml listing repos + plans
-    7.2.2 status --workspace rollup
-    7.2.3 fan-out with per-repo worker budgets
-    GATE: one command reports a multi-repo intent
+7.2 Workspace manifest                                    PARTIAL
+    7.2.1 `dagrun.workspace.yaml` listing repos + plans     DONE
+    7.2.2 workspace rollup (`workspace.json`)              DONE
+    7.2.3 fan-out with per-repo worker budgets              LATER
+    GATE: one command reports a multi-repo intent          PASS
+
 ```
 
 ## 8.0 EXTENSIBILITY SURFACES — native use, no clever shell
 
 ```
-8.1 MCP server                                                NEXT
-    8.1.1 dagrun mcp over stdio: plan/next/claim/done/fail/status/validate
-    8.1.2 resources: current run, node list; prompt: what is next
-    8.1.3 local only, no auth, documented
-    GATE: an MCP client drives a run without a shell
+8.1 MCP server                                           DONE
+    8.1.1 `dagrun mcp` over stdio: 9 tools                       DONE
+    8.1.2 stdout carries protocol frames only; logs to stderr       DONE
+    8.1.3 local only, no auth                                      DONE
+    GATE: an MCP client drives a run without a shell               PASS
 
 8.2 Skill / slash wrappers                                    LATER
     8.2.1 /dagrun skill for jcode | kcode | codex | forge
@@ -242,17 +246,18 @@ Gate: pasting one document into nine artifacts does not pass.
 ## 9.0 OPERATIONAL HARDENING — never wedges
 
 ```
-9.1 Housekeeping                                              LATER
-    9.1.1 gc: prune logs/trace by age, compact state
-    9.1.2 recover --force: deliberate lease clear
-    9.1.3 state schema version + migration
+9.1 Housekeeping                                          PARTIAL
+    9.1.1 `gc`: prune logs/trace by age                    DONE
+    9.1.2 `recover --force`: deliberate lease clear         LATER
+    9.1.3 state schema version + migration                  LATER
     GATE: a year-old run dir is still usable
 
-9.2 Diagnostics                                               LATER
-    9.2.1 doctor: lock contention, expired leases, orphans, disk
-    9.2.2 orphan child detection (pid recorded per claim)
-    9.2.3 stats (shared with 1.2)
-    GATE: one command says whether the run dir is healthy
+9.2 Diagnostics                                           PARTIAL
+    9.2.1 `doctor`: expired leases, orphans, disk, stale wts DONE
+    9.2.2 orphan child detection (pid recorded per claim)   LATER
+    9.2.3 `stats` (shared with 1.2)                         LATER
+    GATE: one command says whether the run dir is healthy  PASS
+    note: gc keeps anything it is not certain about, with a reason
 
 9.3 Robustness                                                LATER
     9.3.1 fuzz the plan parser
@@ -272,11 +277,12 @@ features make that trust cheaper to earn.
     10.1.2 drift report by kind; suggest corrected defaults
     GATE: estimates converge after 3 runs
 
-10.2 CVP scoring                                              NEXT
-    10.2.1 cvp_gate: true marks the node that closes the checkpoint
-    10.2.2 next --by-cvp orders ready work by marginal progress to that gate
-    10.2.3 "what is blocking the CVP" chain output
-    GATE: "what next" answers in terms of the checkpoint, not the tree
+10.2 CVP scoring                                         PARTIAL
+    10.2.1 explicit `cvp_gate:` honoured, else the last GATE  DONE
+    10.2.2 `next --by-cvp` orders ready work toward the gate   DONE
+    10.2.3 "what is blocking the CVP" chain output           DONE
+    10.2.4 marginal-progress scoring (not just distance)     LATER
+    GATE: "what next" answers in checkpoint terms
 
 10.3 Review loop                                              LATER
     10.3.1 auto-append a REVIEW node that reads the trace, writes REVIEW.md
@@ -308,13 +314,13 @@ features make that trust cheaper to earn.
 
 | # | item | why now |
 |---|---|---|
-| 1 | **1.1 real-harness proof** | the only `NOT_RUN` validation cell; four adapters are written but unproven against a live model. Until this passes, "harness-agnostic" is a claim, not a fact. |
-| 2 | **2.2 worktree isolation** | the actual N×M failure mode. Two IMPL nodes on one checkout collide; `workdir` alone does not prevent it. This is the difference between "safe in theory" and "safe with 4 workers". |
-| 3 | **8.1 MCP server** | removes the last reason for an agent to hand-roll dispatch. `next`/`claim`/`done` as tools is smaller than any wrapper and makes dagrun the default path instead of the clever one. |
+| 1 | **4.1 kind-aware predicates** | `done` currently means non-empty. SPEC needs a WHEN/THEN scenario, TEST must reference every SPEC requirement id, RESEARCH needs distinct URLs plus decision and alternatives. This is the difference between "the file exists" and "the work happened". |
+| 2 | **1.2 cost accounting** | harness usage is not parsed into NodeState, so no run can be budgeted before it starts and an unattended run has no cost ceiling. |
+| 3 | **2.2.3 file_scope overlap** | two parallel nodes declaring the same file scope should be rejected at plan time; with per-node worktrees the divergence is now detectable rather than merely possible. |
 
-Delivered since the last revision: **11.0 dynamic decomposition** (discover +
-fan_out + fan_in), which was not on the board when this roadmap was first
-written — see the epic for the CRun lineage.
+Delivered since the previous revision: **v0.4.0** viz + MCP + explain + overlap
++ scale, **v0.5.0** draft + doctor + gc + workspace, **CVP-aware next**, and
+**11.0 dynamic decomposition** (the CRun lineage, see the epic).
 
 Runner-up: **4.4 + 4.1** (explain + kind-aware predicates). Cheap, and it turns
 every failure into a fix instruction, which is what makes an unattended run
