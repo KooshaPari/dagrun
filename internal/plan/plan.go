@@ -64,17 +64,21 @@ type Artifact struct {
 
 // Node is one unit of work. It is the scheduling unit and the trace unit.
 type Node struct {
-	ID        string     `yaml:"id" json:"id"`
-	Kind      string     `yaml:"kind" json:"kind"`
-	Title     string     `yaml:"title,omitempty" json:"title,omitempty"`
-	Deps      []string   `yaml:"deps,omitempty" json:"deps,omitempty"`
-	Estimate  string     `yaml:"estimate,omitempty" json:"estimate,omitempty"`
-	Role      string     `yaml:"role,omitempty" json:"role,omitempty"`
-	Harness   string     `yaml:"harness,omitempty" json:"harness,omitempty"`
-	Provider  string     `yaml:"provider,omitempty" json:"provider,omitempty"`
-	Model     string     `yaml:"model,omitempty" json:"model,omitempty"`
-	Prompt    string     `yaml:"prompt,omitempty" json:"prompt,omitempty"`
-	Artifacts []Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	ID       string   `yaml:"id" json:"id"`
+	Kind     string   `yaml:"kind" json:"kind"`
+	Title    string   `yaml:"title,omitempty" json:"title,omitempty"`
+	Deps     []string `yaml:"deps,omitempty" json:"deps,omitempty"`
+	Estimate string   `yaml:"estimate,omitempty" json:"estimate,omitempty"`
+	Role     string   `yaml:"role,omitempty" json:"role,omitempty"`
+	Harness  string   `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Provider string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Model    string   `yaml:"model,omitempty" json:"model,omitempty"`
+	// ToolProfile caps the tool surface exposed to the model: "full",
+	// "minimal" (or "lite"), or "none". It is the lever for a harness whose
+	// inherited tool inventory overflows a provider's context window.
+	ToolProfile string     `yaml:"tool_profile,omitempty" json:"tool_profile,omitempty"`
+	Prompt      string     `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Artifacts   []Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
 	// FileScope lists the glob paths this node may edit. Plan-time collision
 	// detection rejects two parallel nodes whose scopes intersect.
 	FileScope []string `yaml:"file_scope,omitempty" json:"file_scope,omitempty"`
@@ -110,7 +114,12 @@ type Plan struct {
 	MaxDynamic    int            `yaml:"max_dynamic,omitempty" json:"max_dynamic,omitempty"`
 	// MaxCostUSD caps the run's spend. Zero means no limit.
 	MaxCostUSD float64 `yaml:"max_cost_usd,omitempty" json:"max_cost_usd,omitempty"`
-	Nodes      []*Node `yaml:"nodes" json:"nodes"`
+	// ProviderPolicy caps how much load each provider may carry and says how
+	// long to back off when one refuses work. It is what keeps a rate-limited
+	// provider from degrading the whole run: the nodes routed elsewhere keep
+	// going while the offending provider cools down.
+	ProviderPolicy ProviderPolicy `yaml:"provider_policy,omitempty" json:"provider_policy,omitempty"`
+	Nodes          []*Node        `yaml:"nodes" json:"nodes"`
 
 	// Root is the absolute directory artifact paths are resolved against. It is
 	// set on load and never serialized, so a checked-in plan stays portable.

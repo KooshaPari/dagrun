@@ -106,19 +106,32 @@ func (e *Executor) recordUsage(n *plan.Node, epoch int64, captured []byte, dur t
 		if rate == (plan.Rate{}) {
 			rate = plan.DefaultRate(n.Model)
 		}
-		e.budgetMu.Lock()
-		e.budget.Add(plan.Spend{
+		sp := plan.Spend{
 			InputTokens:     u.InputTokens,
 			OutputTokens:    u.OutputTokens,
 			CacheReadTokens: u.CacheReadTokens,
-		}, rate)
-		spent := e.budget.Spent
-		e.budgetMu.Unlock()
-		if e.budget.Exceeded() {
+		}
+		var spent, max float64
+		var exceeded bool
+		if e.opt.SharedBudget != nil {
+			// The shared budget carries its own lock: it is charged from every
+			// repo's executor at once.
+			e.opt.SharedBudget.Add(sp, rate)
+			spent, max = e.opt.SharedBudget.Spent()
+			exceeded = e.opt.SharedBudget.Exceeded()
+		} else {
+			e.budgetMu.Lock()
+			e.budget.Add(sp, rate)
+			spent = e.budget.Spent
+			max = e.budget.Max
+			exceeded = e.budget.Exceeded()
+			e.budgetMu.Unlock()
+		}
+		if exceeded {
 			fmt.Fprintf(e.opt.Out, "budget spent: $%.2f of $%.2f; no further nodes will be claimed\n",
-				spent, e.opt.MaxCostUSD)
+				spent, max)
 			_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner,
-				Event: "budget.spent", Message: fmt.Sprintf("spent=%.2f max=%.2f", spent, e.opt.MaxCostUSD)})
+				Event: "budget.spent", Message: fmt.Sprintf("spent=%.2f max=%.2f", spent, max)})
 		}
 	}
 }

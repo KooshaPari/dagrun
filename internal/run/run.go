@@ -66,6 +66,27 @@ type Options struct {
 	// Rate prices the tokens a node reports. When it is the zero Rate, the
 	// default rate table is used.
 	Rate plan.Rate
+
+	// Admission, when set, is the per-PROVIDER admission control. A provider
+	// that is rate-limiting or refusing work must degrade throughput, not
+	// correctness: the node is simply not started this tick, and the provider
+	// is put into a cooldown so the other providers keep making progress.
+	//
+	// It is separate from Acquire/Release because those cap the GLOBAL worker
+	// count, while this caps how much load any ONE provider may carry.
+	Admission *plan.Admission
+	// ProviderPolicy is the per-provider limits. Zero value means no limits.
+	ProviderPolicy plan.ProviderPolicy
+
+	// SharedBudget, when set, is the budget state this executor charges
+	// against instead of its own. A multi-repo workspace passes ONE shared
+	// budget to every repo's executor, so MaxCostUSD is a ceiling on the whole
+	// run rather than a ceiling PER REPO. Without this, a three-repo workspace
+	// with a 10 USD cap could spend 30 USD.
+	//
+	// When nil, the executor uses its own budget, which is the single-repo
+	// behaviour.
+	SharedBudget *SharedBudget
 }
 
 // externalBlockedReason is recorded on a node whose cross-repo dependency is
@@ -206,14 +227,32 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 				capacityHeld = true
 				continue // no capacity right now; try again next tick
 			}
+			// Per-provider admission comes AFTER the global slot, so a node that
+			// is blocked by its provider gives the global slot straight back
+			// rather than holding it idle. A provider in cooldown does not stop
+			// the run: the other providers keep going.
+			provider := plan.ProviderOf(n)
+			if e.opt.Admission != nil {
+				if !e.opt.Admission.Acquire(provider, time.Now()) {
+					e.releaseSlot()
+					capacityHeld = true
+					continue
+				}
+			}
 			claim, cerr := e.st.Claim(n.ID, e.opt.Owner, e.opt.Lease, time.Now())
 			if cerr != nil {
 				e.setErr(cerr)
 				e.releaseSlot()
+				if e.opt.Admission != nil {
+					e.opt.Admission.Release(provider)
+				}
 				continue
 			}
 			if !claim.Won {
 				e.releaseSlot() // another process won it
+				if e.opt.Admission != nil {
+					e.opt.Admission.Release(provider)
+				}
 				continue
 			}
 			atomic.AddInt64(&e.active, 1)
@@ -223,6 +262,9 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 				defer e.wg.Done()
 				defer atomic.AddInt64(&e.active, -1)
 				defer e.releaseSlot()
+				if e.opt.Admission != nil {
+					defer e.opt.Admission.Release(provider)
+				}
 				e.execute(ctx, node, epoch, idx)
 			}(n, claim.Epoch)
 			_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID, Event: "node.claim", Epoch: claim.Epoch})
@@ -296,8 +338,23 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 	return sum, e.firstErr
 }
 
+// budgetState returns the budget this executor charges against: the shared
+// budget when the caller supplied one, otherwise the executor's own.
+//
+// The shared budget carries its own lock, so it is safe to charge from several
+// executors at once. The executor's own budget is guarded by budgetMu.
+func (e *Executor) budgetState() *plan.BudgetState {
+	if e.opt.SharedBudget != nil {
+		return &e.opt.SharedBudget.b
+	}
+	return &e.budget
+}
+
 // budgetSpent reports whether the run's cost ceiling has been crossed.
 func (e *Executor) budgetSpent() bool {
+	if e.opt.SharedBudget != nil {
+		return e.opt.SharedBudget.Exceeded()
+	}
 	e.budgetMu.Lock()
 	defer e.budgetMu.Unlock()
 	return e.budget.Exceeded()
@@ -305,6 +362,9 @@ func (e *Executor) budgetSpent() bool {
 
 // BudgetSpent reports the run's spend against its ceiling.
 func (e *Executor) BudgetSpent() (spent, max float64) {
+	if e.opt.SharedBudget != nil {
+		return e.opt.SharedBudget.Spent()
+	}
 	e.budgetMu.Lock()
 	defer e.budgetMu.Unlock()
 	return e.budget.Spent, e.budget.Max

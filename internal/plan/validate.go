@@ -55,6 +55,11 @@ func (p *Plan) Validate() []Issue {
 		default:
 			add(n.ID, "bad_isolation", "unknown isolation %q (want \"\" or worktree)", n.Isolation)
 		}
+		switch n.ToolProfile {
+		case "", "full", "minimal", "lite", "none":
+		default:
+			add(n.ID, "bad_tool_profile", "unknown tool_profile %q (want \"full\", \"minimal\", or \"none\")", n.ToolProfile)
+		}
 		if n.Isolation == "worktree" && n.Workdir != "" {
 			add(n.ID, "isolation_conflict", "isolation: worktree sets the working directory; drop workdir")
 		}
@@ -157,6 +162,13 @@ func (p *Plan) Validate() []Issue {
 
 	if cyc, ok := p.Cycle(); ok {
 		add("", "cycle", "dependency cycle: %s", strings.Join(cyc, " -> "))
+	}
+
+	// The provider policy is validated with the rest of the plan: a bad
+	// backoff duration would otherwise silently become "no cooldown" at run
+	// time, which is the failure mode a limit exists to prevent.
+	for _, issue := range p.ProviderPolicy.Validate() {
+		add("", issue.Code, "%s", issue.Detail)
 	}
 
 	// Collisions are structural: two nodes that can run at the same time and

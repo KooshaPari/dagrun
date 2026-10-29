@@ -54,6 +54,8 @@ func main() {
 		err = cmdTrace(args)
 	case "export":
 		err = cmdExport(args)
+	case "submit":
+		err = cmdSubmit(args)
 	case "detect":
 		err = cmdDetect(args)
 	case "mcp":
@@ -116,6 +118,7 @@ USAGE
   dagrun validate [flags]        re-check every node against the filesystem
   dagrun trace [flags]           merged execution trace
   dagrun export [flags]          emit agileplus | tracera | json
+  dagrun submit [flags]          post the run to a Tracera instance
   dagrun detect [flags]          show detected agent harnesses
   dagrun viz [flags]             render the run as an interactive HTML file
   dagrun draft [flags]           turn an intent paragraph into a valid plan

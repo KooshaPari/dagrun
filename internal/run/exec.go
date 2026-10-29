@@ -230,11 +230,12 @@ func (e *Executor) command(n *plan.Node, prompt, workdir string) (string, []stri
 		a, err := harness.Resolve(n.Harness)
 		if err == nil && a != nil {
 			path, args, cerr := a.Command(harness.Spec{
-				Prompt:   prompt,
-				Workdir:  workdir,
-				Provider: n.Provider,
-				Model:    n.Model,
-				Tools:    e.opt.Tools,
+				Prompt:      prompt,
+				Workdir:     workdir,
+				Provider:    n.Provider,
+				Model:       n.Model,
+				Tools:       e.opt.Tools,
+				ToolProfile: n.ToolProfile,
 			})
 			return path, args, false, cerr
 		}
@@ -304,11 +305,33 @@ func (e *Executor) settleNode(ctx context.Context, v verdict) {
 		if _, err := e.st.SetFailureClass(n.ID, e.opt.Owner, epoch, string(class)); err != nil {
 			e.setErr(err)
 		}
+		// Feed the outcome back to per-provider admission control. A provider
+		// that refused or timed out is put into a cooldown so the next nodes
+		// routed to it wait instead of hammering it. A contract miss is the
+		// AGENT's fault, not the provider's, so it must NOT cool the provider
+		// down: doing so would punish every other node that shares the
+		// provider for something one agent got wrong.
+		if e.opt.Admission != nil {
+			provider := plan.ProviderOf(n)
+			limits := e.opt.ProviderPolicy.LimitsFor(provider)
+			if plan.IsProviderFailure(string(class)) {
+				e.opt.Admission.Fail(provider, limits, time.Now())
+				_ = e.tr.Emit(e.opt.Owner, trace.Event{
+					Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID,
+					Event: "provider.cooldown",
+					Attrs: map[string]any{"provider": provider, "class": string(class)},
+				})
+			} else {
+				e.opt.Admission.Success(provider)
+			}
+		}
 		if err := e.runHook(ctx, n, epoch, "on_fail", v.workdir); err != nil {
 			// The node already failed. A broken cleanup is reported, never
 			// promoted over the failure that came first.
 			fmt.Fprintf(e.opt.Out, "on_fail hook for %s also failed: %v\n", n.ID, err)
 		}
+	} else if e.opt.Admission != nil {
+		e.opt.Admission.Success(plan.ProviderOf(n))
 	}
 
 	status := plan.StatusDone

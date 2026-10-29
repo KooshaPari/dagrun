@@ -37,7 +37,7 @@ dagrun run --workers 1
 | **jcode** | `jcode run --json -C <dir> -p openrouter -m mimo-v2.6-flash <prompt>` | **PASS** | 18.5s | `harness proof from jcode` |
 | **codex** | `codex exec --json --skip-git-repo-check -s workspace-write -C <dir> <prompt>` | **PASS** | 22.4s | `harness proof from codex` |
 | **forge** | `forge -C <dir> -p <prompt>` | **PASS** | 12.0s | `harness proof from forge` |
-| **kcode** | `kcode run --json -C <dir> -p <provider> -m <model> <prompt>` | **BLOCKED (external)** | — | no credentials |
+| **kcode** | `kcode run --json -C <dir> -p <provider> -m <model> <prompt>` | **BLOCKED (external)** | — | see below |
 | **helioslite** | `helioslite -C <dir> -p <prompt>` | **BLOCKED (external)** | — | needs a pty, then prompts |
 
 All three passes ended in `done=1 failed=0`, i.e. the node was marked done only
@@ -73,29 +73,54 @@ This is the difference between "per-node provider/model works" and "per-node
 provider/model is silently overridden". Without the fix, a DAG that pins a model
 per role would have been quietly lying about which model ran.
 
-### 2. kcode does not share jcode's credential store
+### 2. kcode: two independent external blockers
+
+Investigated 2026-10-29 with the fork's own credentials (names inspected, values
+never printed).
+
+**Blocker A — a key-naming mismatch in the fork.** The fork stores its
+credential as `KCODE_OPENAI_COMPAT_API_KEY` in
+`~/Library/Application Support/kcode/openai-compatible.env`, but the binary
+reads `OPENAI_COMPAT_API_KEY` (13 references) and only falls back to the
+`KCODE_`-prefixed name in some paths (5 references). jcode has no such prefix
+(26 references, one name). Exporting the stored key under the name the binary
+reads resolves the key lookup: the request then reaches the provider instead of
+failing with "OPENAI_COMPAT_API_KEY not found".
+
+**Blocker B — the endpoint's own context limit.** With the key resolved, every
+request fails with:
 
 ```
-Error: Failed to select model 'mimo-v2.6-flash':
-OPENROUTER_API_KEY not found in environment or
-/Users/kooshapari/Library/Application Support/kcode/openrouter.env
+status: 400 Bad Request
+response: {"error":{"message":"prompt token count of 64505 exceeds the limit of 64000",
+                    "code":"model_max_prompt_tokens_exceeded"}}
 ```
 
-The fork keeps credentials in `~/Library/Application Support/kcode/`, which
-contains `openai-compatible.env` but no `openrouter.env`, and that file does not
-define `OPENAI_COMPAT_API_KEY`. `openai-compatible` + `MiniMax-M3` fails the same
-way.
+The count is **invariant** to everything under the operator's control:
 
-Remediation (outside this repo, deliberately not done here):
+| variation | prompt tokens |
+|---|---|
+| default | 75,925 |
+| `--tools bash` | 64,516 |
+| `--tool-profile none` | 64,499 |
+| `--mcp-tools deferred --mcp-tools-token-threshold 1` | 75,925 |
+| clean cwd (`-C /tmp/empty`), trivial prompt | 64,505 |
 
-```sh
-# either populate the key the fork looks for
-echo 'OPENROUTER_API_KEY=...' >> "$HOME/Library/Application Support/kcode/openrouter.env"
-# or configure the openai-compatible provider the same way
-```
+So kcode injects a **fixed ~64.5k-token system prompt** of its own, and the
+configured provider (`api.githubcopilot.com`, models `gpt-4o` / `gpt-4.1` /
+`gpt-4o-mini`) caps the prompt at 64,000. The two numbers differ by ~500 tokens.
+Direct `curl` to the same endpoint with the same key returns HTTP 200, so the
+endpoint and the credential are both fine; only kcode's own prompt is too large
+for it.
 
-**Not a dagrun defect.** The adapter is byte-identical to jcode's, and jcode
-passes. It is recorded as blocked rather than claimed as working.
+**This is a kcode-side limit, not a dagrun defect.** The adapter is identical
+to jcode's, and jcode passes. What dagrun CAN do is shrink the child's
+environment, which is worth doing regardless: see the note on `childEnv` below.
+
+**Remediation (outside this repo):** point kcode's `openai-compatible` profile
+at a provider with a larger context window, or reduce kcode's own injected
+prompt. No dagrun change can close a 500-token gap inside a fixed system
+prompt.
 
 ### 3. helioslite needs a pty and a configured default provider
 

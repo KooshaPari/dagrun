@@ -55,6 +55,11 @@ type RunOptions struct {
 	Reset bool
 	// MaxCostUSD caps the spend across every repo.
 	MaxCostUSD float64
+	// Rate prices the tokens a node reports. When it is the zero Rate, each
+	// repo's executor prices from the default rate table. Setting it here
+	// prices the whole workspace the same way, which is what makes the shared
+	// ceiling mean the same number everywhere.
+	Rate plan.Rate
 	// Once runs at most one node across the whole workspace.
 	Once bool
 }
@@ -71,6 +76,14 @@ type RunSummary struct {
 	Nodes   []string `json:"nodes,omitempty"`
 	// Remaining names the nodes that did not finish, namespaced.
 	Remaining []string `json:"remaining,omitempty"`
+	// CostUSD is the measured spend of the WHOLE workspace, and CostLimitUSD
+	// is the ceiling it was held to. Both are zero when no ceiling was set.
+	//
+	// The spend is the aggregate across every repo, not a sum of per-repo
+	// figures each measured against its own limit: the ceiling belongs to the
+	// run, so the number reported belongs to the run too.
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+	CostLimitUSD float64 `json:"cost_limit_usd,omitempty"`
 }
 
 // Run executes the workspace as one DAG.
@@ -196,6 +209,14 @@ func (w *Workspace) Run(ctx context.Context, opt RunOptions) (RunSummary, error)
 	var workers int64
 	global := make(chan struct{}, opt.Workers)
 
+	// ONE budget for the whole workspace. Without this each repo's executor
+	// would get the full ceiling, so a three-repo run with a 10 USD cap could
+	// spend 30 USD while the plan said 10.
+	var sharedBudget *run.SharedBudget
+	if opt.MaxCostUSD > 0 {
+		sharedBudget = run.NewSharedBudget(opt.MaxCostUSD)
+	}
+
 	var (
 		wg       sync.WaitGroup
 		errMu    sync.Mutex
@@ -246,6 +267,10 @@ func (w *Workspace) Run(ctx context.Context, opt RunOptions) (RunSummary, error)
 			Tools:        opt.Tools,
 			Out:          opt.Out,
 			MaxCostUSD:   opt.MaxCostUSD,
+			Rate:         opt.Rate,
+			// ONE budget for the whole workspace, so the ceiling is a property
+			// of the run rather than of each repo.
+			SharedBudget: sharedBudget,
 			Ready:        repoGate,
 			Acquire:      acquire,
 			Release:      release,
@@ -265,6 +290,7 @@ func (w *Workspace) Run(ctx context.Context, opt RunOptions) (RunSummary, error)
 	wg.Wait()
 
 	sum, _ := w.summarize(repos)
+	sum.CostUSD, sum.CostLimitUSD = w.costReport(repos, sharedBudget)
 	return sum, firstErr
 }
 
@@ -349,4 +375,16 @@ func (w *Workspace) summarize(repos map[string]*repoRuntime) (RunSummary, error)
 		}
 	}
 	return sum, nil
+}
+
+// costReport returns the workspace's aggregate spend against its ceiling.
+//
+// The number is read from the shared budget, so it is the sum of what every
+// repo actually spent. Reading it from one repo's executor would understate
+// it by that repo's share.
+func (w *Workspace) costReport(repos map[string]*repoRuntime, shared *run.SharedBudget) (spent, max float64) {
+	if shared == nil {
+		return 0, 0
+	}
+	return shared.Spent()
 }

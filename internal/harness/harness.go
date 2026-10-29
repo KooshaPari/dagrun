@@ -23,6 +23,13 @@ type Spec struct {
 	Tools    []string
 	Agent    string // forge/helioslite agent id
 	Extra    []string
+	// ToolProfile caps the tool surface a harness exposes to the model.
+	//
+	// This matters more than it looks. A harness that inherits the operator's
+	// whole tool inventory can push the prompt past a provider's context limit:
+	// measured with kcode, --tool-profile none cut the prompt from 75,925 to
+	// 64,499 tokens. Harnesses that support it expose the profile as a flag.
+	ToolProfile string
 }
 
 // Info is what detection learned about one harness.
@@ -75,6 +82,9 @@ func jcodeAdapter(name string) *Adapter {
 			}
 			if len(s.Tools) > 0 {
 				args = append(args, "--tools", strings.Join(s.Tools, ","))
+			}
+			if s.ToolProfile != "" {
+				args = append(args, "--tool-profile", s.ToolProfile)
 			}
 			args = append(args, s.Extra...)
 			return append(args, s.Prompt)
