@@ -260,7 +260,32 @@ func (e *Executor) adopt(ctx context.Context, n *plan.Node) bool {
 	if !verify.Satisfied(ctx, root, n) {
 		return false
 	}
-	rep := verify.Node(ctx, root, n)
+	rep := verify.PlanNode(ctx, root, n, e.st.Plan())
+
+	// A discover node is not finished because its work-list file exists. The
+	// file is an INPUT to the expansion, and a malformed one must fail the
+	// node rather than be adopted as done: adopting it here skipped the parse
+	// entirely, which is how a broken work set became a green run.
+	//
+	// The work set is therefore PARSED before the node can be adopted. If the
+	// parse fails the node is not adopted and the failure surfaces when the
+	// expansion runs.
+	if n.Discover != nil {
+		if _, err := plan.LoadUnits(root, *n.Discover); err != nil {
+			return false
+		}
+	}
+
+	// Adoption is "the artifacts already exist", which is only proof of work
+	// when the node also touched the scope it declared. An isolated node whose
+	// branch shows no change in its scope did NOT do the work, even if the
+	// files happen to be there, so it must run rather than be adopted.
+	if n.Isolation == IsolationWorktree && len(n.FileScope) > 0 {
+		wt := worktree{Path: filepath.Join(e.st.Dir(), "worktrees", trace.Name(n.ID))}
+		if msg := e.checkScope(n, wt); msg != "" {
+			return false
+		}
+	}
 	if err := e.st.Force(n.ID, plan.StatusDone, "adopted: artifacts already satisfy the contract", &rep, time.Now()); err != nil {
 		return false
 	}

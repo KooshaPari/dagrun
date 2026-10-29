@@ -110,7 +110,7 @@ func explain(args []string, out io.Writer) (int, error) {
 		root = ns.Worktree
 	}
 
-	rep := verify.Node(context.Background(), root, n)
+	rep := verify.PlanNode(context.Background(), root, n, p)
 	done := ns.Status == plan.StatusDone
 	blocked := blockingDeps(snap, n)
 

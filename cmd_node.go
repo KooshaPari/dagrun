@@ -66,7 +66,7 @@ func cmdDone(args []string) error {
 	if n == nil {
 		return fmt.Errorf("unknown node %q", pos[0])
 	}
-	rep := verify.Node(context.Background(), st.Root(), n)
+	rep := verify.PlanNode(context.Background(), st.Root(), n, p)
 	if !rep.OK && !*force {
 		if jsonOut {
 			enc := json.NewEncoder(os.Stdout)
@@ -147,7 +147,7 @@ func cmdValidate(args []string) error {
 		if ns == nil {
 			continue
 		}
-		rep := verify.Node(ctx, st.Root(), n)
+		rep := verify.PlanNode(ctx, st.Root(), n, p)
 		if ns.Status == plan.StatusDone && !rep.OK {
 			bad++
 			reports = append(reports, rep)

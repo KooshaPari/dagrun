@@ -5,9 +5,11 @@ package verify
 // node of a given kind is supposed to have.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/KooshaPari/dagrun/internal/plan"
@@ -23,7 +25,21 @@ type KindResult struct {
 
 // KindCheck applies the contract for the node's kind. It returns nil when the
 // kind has no extra contract.
+//
+// It is the single-node form: cross-node contracts are skipped. Use
+// PlanKindCheck when the whole plan is available.
 func KindCheck(n *plan.Node, root string) *KindResult {
+	return PlanKindCheck(n, root, nil)
+}
+
+// PlanKindCheck applies the contract for the node's kind with the plan in
+// view.
+//
+// The plan enables the cross-node contracts: a TEST must reference the
+// requirement ids of the SPEC it depends on. A nil plan skips those, so the
+// result is never silently "pass" for a check that could not run: the caller
+// is told which contracts were skipped.
+func PlanKindCheck(n *plan.Node, root string, p *plan.Plan) *KindResult {
 	if n == nil {
 		return nil
 	}
@@ -31,7 +47,7 @@ func KindCheck(n *plan.Node, root string) *KindResult {
 	case "SPEC":
 		return checkSPEC(n, root)
 	case "TEST":
-		return checkTEST(n, root)
+		return checkTEST(n, root, p)
 	case "RESEARCH":
 		return checkRESEARCH(n, root)
 	case "SOTA":
@@ -150,7 +166,7 @@ func checkSPEC(n *plan.Node, root string) *KindResult {
 	return nil
 }
 
-func checkTEST(n *plan.Node, root string) *KindResult {
+func checkTEST(n *plan.Node, root string, p *plan.Plan) *KindResult {
 	hasTestFile := false
 	for _, a := range n.Artifacts {
 		if strings.Contains(strings.ToLower(a.Path), "test") {
@@ -163,10 +179,96 @@ func checkTEST(n *plan.Node, root string) *KindResult {
 			Detail: "no artifact path looks like a test file",
 			Hint:   "declare an artifact whose path contains \"test\" (e.g. internal/pkg/foo_test.go)"}
 	}
-	// REQ coverage needs the plan (the sibling SPEC node) and a node does not
-	// carry its plan, so only the test-file rule is enforced here. See
-	// KindCheck's contract: coverage is skipped, not silently passed.
+	// Coverage needs the plan: the requirement ids live in the SPEC node's
+	// artifacts, and this node can only be checked against them if the plan is
+	// in view. Without a plan the coverage contract is SKIPPED, not passed.
+	if p == nil {
+		return nil
+	}
+	specs := specAncestors(p, n)
+	if len(specs) == 0 {
+		return nil
+	}
+	reqs := requiredIDs(root, specs)
+	if len(reqs) == 0 {
+		return nil
+	}
+	text := joined(kindArtifacts(n, root))
+	var missing []string
+	for _, id := range reqs {
+		if !strings.Contains(text, id) {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return &KindResult{Code: "test_uncovers_req",
+			Detail: fmt.Sprintf("the test does not reference requirement(s) %s", strings.Join(missing, ", ")),
+			Hint:   fmt.Sprintf("cover each requirement id (%s) in the test artifact", strings.Join(reqs, ", "))}
+	}
 	return nil
+}
+
+// specAncestors returns the SPEC nodes this node depends on, transitively.
+func specAncestors(p *plan.Plan, n *plan.Node) []*plan.Node {
+	idx := p.Index()
+	seen := map[string]bool{}
+	var out []*plan.Node
+	var walk func(id string)
+	walk = func(id string) {
+		cur := idx[id]
+		if cur == nil {
+			return
+		}
+		for _, d := range cur.Deps {
+			if seen[d] {
+				continue
+			}
+			seen[d] = true
+			dep := idx[d]
+			if dep == nil {
+				continue
+			}
+			if dep.Kind == "SPEC" {
+				out = append(out, dep)
+				continue
+			}
+			walk(d)
+		}
+	}
+	walk(n.ID)
+	return out
+}
+
+// reqIDPattern matches the requirement id forms the tool understands:
+// REQ-1, REQ-12, R1, R12.
+var reqIDPattern = regexp.MustCompile(`(?i)\b(REQ-\d+|R\d+)\b`)
+
+// requiredIDs collects the requirement ids stated by the given SPEC nodes,
+// reading their artifacts from disk under root.
+func requiredIDs(root string, specs []*plan.Node) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, sp := range specs {
+		for _, a := range sp.Artifacts {
+			path := a.Path
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(root, path)
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			for _, m := range reqIDPattern.FindAllString(string(b), -1) {
+				key := strings.ToUpper(m)
+				if !seen[key] {
+					seen[key] = true
+					out = append(out, m)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 var urlRE = regexp.MustCompile(`https?://[^\s\)\]\>"'` + "`" + `]+`)

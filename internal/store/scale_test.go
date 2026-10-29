@@ -111,6 +111,9 @@ func claimHeartbeatFinish(st *Store, id, owner string) {
 // one node cycle per worker, which keeps a 200x benchtime bounded while still
 // putting the real contention pattern on the lock.
 func BenchmarkClaim500Nodes(b *testing.B) {
+	if !scaleMeasurementEnabled {
+		b.Skip("timing measurement: run with -tags scale")
+	}
 	for _, workers := range []int{1, 8, 32} {
 		workers := workers
 		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
@@ -153,6 +156,7 @@ func BenchmarkClaim500Nodes(b *testing.B) {
 // goroutines hammer the store, and fails if the p95 exceeds the ROADMAP 2.1.2
 // budget. This is the number that decides whether per-node sharding is needed.
 func TestLockWaitUnderLoad(t *testing.T) {
+	requireScaleMeasurement(t)
 	const (
 		workers   = 32
 		perWorker = 25
@@ -233,6 +237,7 @@ func TestLockWaitUnderLoad(t *testing.T) {
 // Measured on an idle machine: ~25ms per transition, against a ~1ms raw write
 // baseline. The absolute numbers and the sharding verdict are in docs/scale.md.
 func TestLockTransitionCost(t *testing.T) {
+	requireScaleMeasurement(t)
 	const (
 		workers   = 16
 		perWorker = 20
@@ -295,6 +300,7 @@ func TestLockTransitionCost(t *testing.T) {
 // TestStateSizeAt500Nodes records the on-disk document size, because the rewrite
 // cost is what makes the lock wait grow with node count.
 func TestStateSizeAt500Nodes(t *testing.T) {
+	requireScaleMeasurement(t)
 	st, ids := openScaleStore(t, ScaleNodes)
 	for _, id := range ids {
 		claimHeartbeatFinish(st, id, "w")
@@ -310,5 +316,27 @@ func TestStateSizeAt500Nodes(t *testing.T) {
 	}
 	if len(snap.Nodes) != ScaleNodes {
 		t.Fatalf("state has %d nodes, want %d", len(snap.Nodes), ScaleNodes)
+	}
+}
+
+// requireScaleMeasurement skips a timing-sensitive measurement unless it was
+// asked for.
+//
+// The scale tests measure wall time on a machine that is often busy: the
+// operator has agents running, and the same test failed with "no space left on
+// device" while the disk filled. A measurement that fails because the BOX is
+// busy is not a signal about the tool, and a suite that goes red for that
+// reason trains people to ignore it.
+//
+// Run them explicitly when the numbers matter:
+//
+//	go test -tags scale -timeout 600s ./internal/store/
+//	go test -bench . -benchtime 200x ./internal/store/
+//
+// The build tag keeps them out of the default suite entirely.
+func requireScaleMeasurement(t *testing.T) {
+	t.Helper()
+	if !scaleMeasurementEnabled {
+		t.Skip("timing measurement: run with -tags scale")
 	}
 }

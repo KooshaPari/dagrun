@@ -324,7 +324,7 @@ func (s *Server) toolDone(ctx context.Context, dir, node string, force bool) (an
 	if n == nil {
 		return nil, true, fmt.Errorf("unknown node %q", node)
 	}
-	rep := verify.Node(ctx, h.st.Root(), n)
+	rep := verify.PlanNode(ctx, h.st.Root(), n, h.plan)
 	if !rep.OK && !force {
 		return map[string]any{"node": node, "ok": false, "report": rep, "hint": verify.Hint(n, rep)}, true, nil
 	}
@@ -424,7 +424,7 @@ func (s *Server) toolValidate(ctx context.Context, dir string) (any, bool, error
 		if ns == nil {
 			continue
 		}
-		rep := verify.Node(ctx, h.st.Root(), n)
+		rep := verify.PlanNode(ctx, h.st.Root(), n, h.plan)
 		if ns.Status == plan.StatusDone && !rep.OK {
 			broken++
 			findings = append(findings, map[string]string{"node": n.ID, "reason": rep.Reason})
@@ -446,7 +446,7 @@ func (s *Server) toolExplain(ctx context.Context, dir, node string) (any, bool, 
 		return nil, true, fmt.Errorf("unknown node %q", node)
 	}
 	ns := h.snap.Nodes[node]
-	rep := verify.Node(ctx, h.st.Root(), n)
+	rep := verify.PlanNode(ctx, h.st.Root(), n, h.plan)
 	status := plan.StatusPending
 	attempts := 0
 	lastErr := ""

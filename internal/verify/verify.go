@@ -52,7 +52,20 @@ type Report struct {
 }
 
 // Node verifies a node against the filesystem rooted at root.
+//
+// It checks the node on its own: the artifacts it declared and the check it
+// declared. Cross-node checks (does this TEST cover a SPEC requirement?) need
+// the whole plan, so use PlanNode for those.
 func Node(ctx context.Context, root string, n *plan.Node) Report {
+	return PlanNode(ctx, root, n, nil)
+}
+
+// PlanNode verifies a node with the whole plan in view.
+//
+// Passing the plan enables the cross-node contracts: a TEST must reference the
+// requirement ids of a SPEC it depends on, and a node must not claim the same
+// artifact as a parallel sibling. Passing nil keeps the single-node behaviour.
+func PlanNode(ctx context.Context, root string, n *plan.Node, p *plan.Plan) Report {
 	r := Report{NodeID: n.ID, OK: true}
 	var failures []string
 
@@ -65,7 +78,7 @@ func Node(ctx context.Context, root string, n *plan.Node) Report {
 		}
 	}
 
-	if kr := KindCheck(n, root); kr != nil && !kr.OK {
+	if kr := PlanKindCheck(n, root, p); kr != nil && !kr.OK {
 		r.OK = false
 		failures = append(failures, fmt.Sprintf("%s: %s %s [%s]", n.Kind, kr.Code, kr.Detail, kr.Hint))
 	}

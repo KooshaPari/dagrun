@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KooshaPari/dagrun/internal/diffscope"
 	"github.com/KooshaPari/dagrun/internal/harness"
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/trace"
@@ -51,8 +52,10 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 		workdir = filepath.Join(e.st.Root(), n.Workdir)
 	}
 
+	var wt worktree
 	if n.Isolation == IsolationWorktree {
-		wt, err := ensureWorktree(e.st.Root(), e.st.Dir(), e.st.Plan().Run, n)
+		var err error
+		wt, err = ensureWorktree(e.st.Root(), e.st.Dir(), e.st.Plan().Run, n)
 		if err != nil {
 			e.settleNode(ctx, verdict{node: n, epoch: epoch, exitCode: -1, start: start, workdir: workdir,
 				rep:  verify.Report{NodeID: n.ID, Reason: err.Error()},
@@ -80,7 +83,7 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 	// A check-only node has no child: its evidence already exists on disk.
 	if n.Check != "" && len(n.Artifacts) == 0 {
 		e.settleNode(ctx, verdict{node: n, epoch: epoch, start: start, workdir: workdir,
-			rep: verify.Node(ctx, vroot, n)})
+			rep: verify.PlanNode(ctx, vroot, n, e.st.Plan())})
 		return
 	}
 
@@ -163,7 +166,22 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 	default:
 	}
 
-	rep := verify.Node(ctx, vroot, n)
+	rep := verify.PlanNode(ctx, vroot, n, e.st.Plan())
+
+	// Coherence: an isolated node that declared a file_scope must have
+	// actually touched it. Its worktree branch is the evidence.
+	if rep.OK && n.Isolation == IsolationWorktree && len(n.FileScope) > 0 {
+		if msg := e.checkScope(n, wt); msg != "" {
+			rep.OK = false
+			rep.Reason = msg
+			rep.Artifacts = append(rep.Artifacts, verify.ArtifactResult{
+				Path:   strings.Join(n.FileScope, ", "),
+				OK:     false,
+				Code:   "scope_untouched",
+				Detail: msg,
+			})
+		}
+	}
 	e.settleNode(ctx, verdict{
 		node:     n,
 		epoch:    epoch,
@@ -174,6 +192,33 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 		captured: sink.tail.Bytes(),
 		fail:     failCtx{spawnErr: spawnErr, timedOut: cctx.Err() == context.DeadlineExceeded},
 	})
+}
+
+// checkScope verifies that an isolated node changed at least one file inside
+// the scope it declared.
+//
+// The check is SKIPPED when the evidence is unavailable: a plan root that is
+// not a git repository, or a branch with no base to compare against. A skipped
+// check is not a passed check, and the report says so.
+func (e *Executor) checkScope(n *plan.Node, wt worktree) string {
+	repo := e.st.Root()
+	changes, err := diffscope.WorktreeChanges(repo, "HEAD", wt.Branch, wt.Path)
+	if err != nil {
+		return fmt.Sprintf("scope check skipped (no git evidence): %v", err)
+	}
+	if len(changes) == 0 {
+		return fmt.Sprintf("scope_untouched: the node changed nothing, so it did not do the work it declared (scope: %s)",
+			strings.Join(n.FileScope, ", "))
+	}
+	if !diffscope.Touches(changes, n.FileScope) {
+		var paths []string
+		for _, c := range changes {
+			paths = append(paths, c.Path)
+		}
+		return fmt.Sprintf("scope_untouched: the node changed %s, which is outside its declared scope (%s)",
+			strings.Join(paths, ", "), strings.Join(n.FileScope, ", "))
+	}
+	return ""
 }
 
 // command picks the executable. Precedence: an explicit --exec-template wins

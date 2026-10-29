@@ -196,3 +196,22 @@ func TestMaxDynamicCapsExpansion(t *testing.T) {
 	}
 	_ = verify.Satisfied
 }
+
+// TestMalformedWorkSetIsNeverAdoptedAsDone pins a bug that only showed up
+// under load: a discover node whose work-list file already existed was
+// ADOPTED as done before the expansion ran, so the malformed list was never
+// parsed and the run came back green.
+//
+// The work set is an INPUT to the expansion, not evidence that it happened.
+func TestMalformedWorkSetIsNeverAdoptedAsDone(t *testing.T) {
+	yaml := strings.Replace(fanOutPlan, "format: lines", "format: json", 1)
+	for i := 0; i < 4; i++ {
+		h := fanOutRig(t, yaml)
+		h.loop(t, fanOutTemplate, 2)
+		snap, _ := h.st.Snapshot()
+		ns := snap.Nodes["4.1"]
+		if ns == nil || ns.Status != plan.StatusFailed {
+			t.Fatalf("run %d: discover parent = %v, want failed", i, ns)
+		}
+	}
+}
