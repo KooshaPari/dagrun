@@ -7,96 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/KooshaPari/dagrun/internal/harness"
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/store"
 	"github.com/KooshaPari/dagrun/internal/verify"
 )
-
-// readyNode is what an agent-driving loop consumes from `dagrun next`.
-type readyNode struct {
-	ID        string          `json:"id"`
-	Kind      string          `json:"kind"`
-	Title     string          `json:"title"`
-	Role      string          `json:"role"`
-	Harness   string          `json:"harness"`
-	Resolved  string          `json:"resolved,omitempty"`
-	Provider  string          `json:"provider,omitempty"`
-	Model     string          `json:"model,omitempty"`
-	Estimate  string          `json:"estimate"`
-	Deps      []string        `json:"deps,omitempty"`
-	Prompt    string          `json:"prompt"`
-	Artifacts []plan.Artifact `json:"artifacts,omitempty"`
-	Check     string          `json:"check,omitempty"`
-	Runnable  bool            `json:"runnable_by_run"`
-	Satisfied bool            `json:"artifacts_already_valid,omitempty"`
-}
-
-func cmdNext(args []string) error {
-	var dir string
-	var jsonOut bool
-	flags, _ := splitArgs(args)
-	fs := flagSet("next", &dir, &jsonOut)
-	role := fs.String("role", "", "only nodes with this role")
-	count := fs.Int("count", 0, "limit the number returned")
-	if err := fs.Parse(flags); err != nil {
-		return err
-	}
-	p, st, _, err := openRun(dir)
-	if err != nil {
-		return err
-	}
-	snap, err := st.Snapshot()
-	if err != nil {
-		return err
-	}
-	idx := p.Index()
-	ctx := context.Background()
-	var out []readyNode
-	for _, n := range p.Sorted() {
-		ns := snap.Nodes[n.ID]
-		if ns == nil || ns.Status != plan.StatusPending {
-			continue
-		}
-		if !st.DepsDone(snap, n.ID) {
-			continue
-		}
-		if *role != "" && n.Role != *role {
-			continue
-		}
-		resolved := ""
-		if a, err := harness.Resolve(n.Harness); err == nil && a != nil {
-			resolved = a.Name
-		}
-		out = append(out, readyNode{
-			ID: n.ID, Kind: n.Kind, Title: n.Title, Role: n.Role,
-			Harness: n.Harness, Resolved: resolved, Provider: n.Provider, Model: n.Model,
-			Estimate: n.Estimate, Deps: n.Deps,
-			Prompt:    plan.Prompt(p, n, idx),
-			Artifacts: n.Artifacts, Check: n.Check,
-			Runnable:  len(n.Artifacts) > 0 || n.Check != "" || n.Prompt != "",
-			Satisfied: verify.Satisfied(ctx, st.Root(), n),
-		})
-		if *count > 0 && len(out) >= *count {
-			break
-		}
-	}
-
-	if jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]any{"run": p.Run, "ready": out, "count": len(out)})
-	}
-	if len(out) == 0 {
-		fmt.Println("no ready nodes")
-		return nil
-	}
-	for _, r := range out {
-		fmt.Printf("%s  %-9s %-40s via %s (%s)\n", r.ID, r.Kind, truncate(r.Title, 40), r.Harness, r.Resolved)
-	}
-	fmt.Printf("\n%d ready node(s); use --json for prompts\n", len(out))
-	return nil
-}
 
 func cmdClaim(args []string) error {
 	var dir string
