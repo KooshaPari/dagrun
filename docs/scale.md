@@ -12,12 +12,17 @@ go test -bench 'BenchmarkClaim' -benchtime 200x ./internal/store/
 | measurement | value |
 |---|---|
 | state.json at 500 nodes | **90,465 bytes (88.3 KiB)** |
-| serialized cost of one claim+finish pair | **25.3 ms** |
-| implied last-claimer wait, 10-wide wave | ~253 ms |
-| implied last-claimer wait, 32-wide wave | ~809 ms |
-| implied last-claimer wait, 64-wide wave | ~1.62 s |
-| 32 goroutines claiming in a tight loop (p50) | 19.2 ms |
-| 32 goroutines claiming in a tight loop (p95) | 1.43 s |
+| serialized cost of one claim+finish pair | **25-33 ms** |
+| implied last-claimer wait, 10-wide wave | ~250-330 ms |
+| implied last-claimer wait, 32-wide wave | ~0.8-1.1 s |
+| implied last-claimer wait, 64-wide wave | ~1.6-2.1 s |
+| 32 goroutines claiming in a tight loop (p50) | 19-66 ms |
+| 32 goroutines claiming in a tight loop (p95) | 1.4-8.1 s |
+
+The spread is the box: this machine was under load from other agents during
+the measurements, and a plain 90 KiB file write measured 128 us idle and 737 ms
+under load. The numbers above are therefore a range, and the tests assert
+**ratios**, not absolute milliseconds.
 
 ## What this means
 
@@ -66,6 +71,25 @@ Durability trade-off, stated plainly: `state.json` is written with `fsync` then
 the last transition, never a torn file. Recovery is still sound because a lost
 transition means the node runs again and its artifacts are adopted rather than
 regenerated. Heartbeats skip `fsync` entirely: losing one only shortens a lease.
+
+## Where the 25 ms actually goes
+
+Measured directly, one step at a time, on a 90 KiB document:
+
+| step | cost |
+|---|---|
+| write, no fsync | **128 us** |
+| write + fsync | **16.0 ms** |
+| write + fsync + rename | 9.1 ms (measured separately, fsync-dominated) |
+
+**fsync is the entire cost.** The rename is free. That is why the optimisation
+table above works: dropping the directory fsync and the heartbeat fsync removed
+two of the three sync points, and p50 fell 50x.
+
+It also means the remaining cost is not reducible without changing the
+durability contract, and the contract is deliberate: a power loss may lose the
+last transition, never a torn file, and a lost transition means the node runs
+again and is adopted rather than regenerated.
 
 ## Not yet measured
 

@@ -11,13 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/store"
 )
 
 // Version is set at build time with -ldflags "-X main.Version=...".
-var Version = "0.4.0"
+var Version = "0.5.0"
 
 const defaultDir = ".dagrun"
 
@@ -61,6 +62,14 @@ func main() {
 		err = cmdExplain(args)
 	case "viz":
 		err = cmdViz(args)
+	case "draft":
+		err = cmdDraft(args)
+	case "doctor":
+		err = cmdDoctor(args)
+	case "gc":
+		err = cmdGC(args)
+	case "workspace":
+		err = cmdWorkspace(args)
 	case "version", "--version", "-v":
 		fmt.Printf("dagrun %s\n", Version)
 		return
@@ -96,6 +105,13 @@ USAGE
   dagrun trace [flags]           merged execution trace
   dagrun export [flags]          emit agileplus | tracera | json
   dagrun detect [flags]          show detected agent harnesses
+  dagrun viz [flags]             render the run as an interactive HTML file
+  dagrun draft [flags]           turn an intent paragraph into a valid plan
+  dagrun explain NODE [flags]    say why a node is not done and what to do
+  dagrun doctor [flags]          read-only health check of the run directory
+  dagrun gc [flags]              prune old logs, traces, and merged worktrees
+  dagrun workspace [flags]       validate and install a multi-repo workspace
+  dagrun mcp                     serve the Model Context Protocol over stdio
   dagrun version
 
 COMMON FLAGS
@@ -177,6 +193,9 @@ func takesValue(a string) bool {
 	name = "-" + strings.TrimLeft(name, "-")
 	return valueFlags[name]
 }
+
+// nowUTC is the timestamp format used in generated documents.
+func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
 
 // openRun loads the installed plan and its store.
 func openRun(dir string) (*plan.Plan, *store.Store, []byte, error) {
