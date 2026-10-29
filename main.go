@@ -70,6 +70,18 @@ func main() {
 		err = cmdGC(args)
 	case "workspace":
 		err = cmdWorkspace(args)
+	case "timeline":
+		err = cmdTimeline(args)
+	case "stats":
+		err = cmdStats(args)
+	case "critique":
+		err = cmdCritique(args)
+	case "lint":
+		err = cmdLint(args)
+	case "review":
+		err = cmdReview(args)
+	case "template":
+		err = cmdTemplate(args)
 	case "version", "--version", "-v":
 		fmt.Printf("dagrun %s\n", Version)
 		return
@@ -111,6 +123,12 @@ USAGE
   dagrun doctor [flags]          read-only health check of the run directory
   dagrun gc [flags]              prune old logs, traces, and merged worktrees
   dagrun workspace [flags]       validate and install a multi-repo workspace
+  dagrun timeline [flags]        render the run timeline
+  dagrun stats [flags]           per-kind duration, adoption and retry statistics
+  dagrun lint [flags]            run the semantic plan linter
+  dagrun critique [flags]        write a CRITIQUE.md critique of a plan
+  dagrun review [flags]          write a REVIEW.md from the trace
+  dagrun template [flags]        print a plan template
   dagrun mcp                     serve the Model Context Protocol over stdio
   dagrun version
 

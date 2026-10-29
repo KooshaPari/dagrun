@@ -17,6 +17,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/KooshaPari/dagrun/internal/harness"
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/verify"
 )
@@ -26,16 +27,23 @@ const StateVersion = 1
 
 // NodeState is the mutable per-node record.
 type NodeState struct {
-	Status     string         `json:"status"`
-	Attempts   int            `json:"attempts,omitempty"`
-	Epoch      int64          `json:"epoch,omitempty"`
-	Owner      string         `json:"owner,omitempty"`
-	LeaseUntil time.Time      `json:"lease_until,omitempty"`
-	StartedAt  time.Time      `json:"started_at,omitempty"`
-	FinishedAt time.Time      `json:"finished_at,omitempty"`
-	ExitCode   int            `json:"exit_code,omitempty"`
-	Worktree   string         `json:"worktree,omitempty"`
-	Branch     string         `json:"branch,omitempty"`
+	Status     string    `json:"status"`
+	Attempts   int       `json:"attempts,omitempty"`
+	Epoch      int64     `json:"epoch,omitempty"`
+	Owner      string    `json:"owner,omitempty"`
+	LeaseUntil time.Time `json:"lease_until,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
+	ExitCode   int       `json:"exit_code,omitempty"`
+	Worktree   string    `json:"worktree,omitempty"`
+	Branch     string    `json:"branch,omitempty"`
+	// Usage is the token and cost accounting the harness reported, when it did.
+	Usage *harness.Usage `json:"usage,omitempty"`
+	// FailureClass names why a node failed, so a retry policy can act on it.
+	FailureClass string `json:"failure_class,omitempty"`
+	// DurationMS is the measured wall time of the node, used to calibrate
+	// estimates.
+	DurationMS int64          `json:"duration_ms,omitempty"`
 	LastError  string         `json:"last_error,omitempty"`
 	Verify     *verify.Report `json:"verify,omitempty"`
 }
