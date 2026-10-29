@@ -1,6 +1,10 @@
 # dagrun
 
-A work-DAG executor for coding agents. Small, fast, and boring on purpose.
+A work-DAG executor for agents. Small, fast, and boring on purpose.
+
+It is not tied to code: the same plan shape runs a research sweep, a migration, a
+document set, or a lint fan-out across three repos. Git is needed only when you
+ask for worktree isolation.
 
 An agent writes a plan. `dagrun` decides what is ready, hands each node to an
 agent (or runs it itself), and then **checks the filesystem**: a node is done
@@ -271,7 +275,9 @@ and lets you wrap any CLI.
 
 ## Concurrency
 
-Designed for N agents × M DAG-spawned workers on one repository.
+Designed for N agents × M DAG-spawned workers, on one repo, on many repos, or on
+no repo at all. Nothing in the executor assumes code: artifacts are files, checks
+are shell commands, and git is only required for `isolation: worktree`.
 
 - **State is one JSON document** (`.dagrun/state.json`) rewritten under an
   exclusive `flock`, with `tmp` + `fsync` + `rename`. No daemon, no SQLite, no
