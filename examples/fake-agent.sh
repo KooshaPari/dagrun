@@ -41,8 +41,22 @@ printf '%s\n' "$paths" | while IFS= read -r rel; do
     done
     printf '\n## Sources\n\n'
     printf -- '- https://example.invalid/placeholder\n'
+    printf -- '- https://example.invalid/placeholder-2\n'
     printf '\nRequirement: placeholder content for the demo.\n'
+    printf '#### Scenario: when the placeholder is read\n'
+    printf 'then the demo is satisfied.\n'
+    printf '\nDecision: use the placeholder.\n'
+    printf 'Alternatives: none considered.\n'
     printf '\nVerdict: adopt, because the placeholder satisfies every predicate.\n'
+    printf '\n## Candidates\n'
+    printf -- '- **Option A** — simple\n'
+    printf -- '- **Option B** — complete\n'
+    printf '\n## Axes\n'
+    printf -- '- axis: cost vs complexity\n'
+    printf -- '- axis: speed vs memory\n'
+    printf -- '- axis: build size vs runtime\n'
+    printf '\nStates: empty, loading, error.\n'
+    printf 'Accessibility: aria labels on every control.\n'
   } > "$rel"
   echo "fake-agent: wrote $rel ($(wc -c < "$rel" | tr -d ' ') bytes)"
 done

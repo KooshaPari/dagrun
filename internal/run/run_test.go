@@ -40,9 +40,11 @@ nodes:
     check: "grep -q 'func main' artifacts/code.go"
 `
 
-// goodTemplate writes both artifacts. It contains no backslashes because the
+// goodTemplate writes both artifacts with content that satisfies the kind
+// contracts: the INTENT artifact carries an Acceptance Criteria section, and
+// the CODE artifact is a real Go file. It contains no backslashes because the
 // template splitter treats backslash as an escape character.
-const goodTemplate = `sh -c "mkdir -p artifacts && printf '0123456789abcdef' > artifacts/INTENT.md && printf 'package main func main() {}' > artifacts/code.go"`
+const goodTemplate = `sh -c "mkdir -p artifacts && printf '## Acceptance Criteria' > artifacts/INTENT.md && printf '\n- one\n- two\n- three\n' >> artifacts/INTENT.md && printf 'package main' > artifacts/code.go && printf '\nfunc main() {}\n' >> artifacts/code.go"`
 
 type rig struct {
 	st *store.Store

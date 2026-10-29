@@ -65,6 +65,11 @@ func Node(ctx context.Context, root string, n *plan.Node) Report {
 		}
 	}
 
+	if kr := KindCheck(n, root); kr != nil && !kr.OK {
+		r.OK = false
+		failures = append(failures, fmt.Sprintf("%s: %s %s [%s]", n.Kind, kr.Code, kr.Detail, kr.Hint))
+	}
+
 	if n.Check != "" {
 		dir := root
 		if n.Workdir != "" {

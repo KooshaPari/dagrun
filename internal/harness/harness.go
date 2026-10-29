@@ -260,20 +260,27 @@ func ExecCommand(template, prompt, workdir, model string) (string, []string, boo
 
 // splitTemplate is a quote-aware split so a template can carry a prompt with
 // spaces in a single argument.
+//
+// Backslash is NOT an escape character here. A template is usually a shell
+// command, and `printf 'a\nb'` must reach the shell with its backslash intact:
+// treating `\n` as an escape produced the literal text "anb" and silently broke
+// every template that wrote a newline. Backslash is only special inside
+// single quotes, where the shell itself removes it.
 func splitTemplate(s string) ([]string, error) {
 	var out []string
 	var cur strings.Builder
 	var quote rune
-	escaped := false
 	for _, r := range s {
 		switch {
-		case escaped:
-			cur.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case quote != 0:
-			if r == quote {
+		case quote == '\'':
+			// inside single quotes the shell handles every escape itself
+			if r == '\'' {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case quote == '"':
+			if r == '"' {
 				quote = 0
 			} else {
 				cur.WriteRune(r)
