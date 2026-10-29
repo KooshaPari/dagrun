@@ -301,7 +301,7 @@ func (e *Executor) settleNode(ctx context.Context, v verdict) {
 
 	class := FailureNone
 	if !rep.OK {
-		class = Classify(&rep, checkErr(rep), fail.spawnErr, fail.timedOut)
+		class = Classify(&rep, checkErr(rep), fail.spawnErr, fail.timedOut, v.exitCode)
 		if _, err := e.st.SetFailureClass(n.ID, e.opt.Owner, epoch, string(class)); err != nil {
 			e.setErr(err)
 		}
@@ -314,7 +314,7 @@ func (e *Executor) settleNode(ctx context.Context, v verdict) {
 		if e.opt.Admission != nil {
 			provider := plan.ProviderOf(n)
 			limits := e.opt.ProviderPolicy.LimitsFor(provider)
-			if plan.IsProviderFailure(string(class)) {
+			if isProviderFailureClass(class) {
 				e.opt.Admission.Fail(provider, limits, time.Now())
 				_ = e.tr.Emit(e.opt.Owner, trace.Event{
 					Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID,
@@ -338,6 +338,13 @@ func (e *Executor) settleNode(ctx context.Context, v verdict) {
 	reason := ""
 	if !rep.OK {
 		reason = rep.Reason
+		// When the harness itself failed, the artifact reason is a
+		// CONSEQUENCE, not the cause: "bad.txt: missing file" hides the fact
+		// that the provider refused the work. Say so, or the operator reads a
+		// contract problem where there was a provider outage.
+		if v.exitCode != 0 && class == FailureHarnessError {
+			reason = fmt.Sprintf("harness exited %d: %s", v.exitCode, rep.Reason)
+		}
 		status = e.retryOrFail(n, class)
 	}
 

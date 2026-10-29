@@ -24,10 +24,23 @@ const (
 )
 
 // Classify decides the failure class.
-func Classify(rep *verify.Report, checkErr error, spawnErr error, timedOut bool) FailureClass {
+//
+// exitCode is the child's exit status. It matters because a harness that
+// exits NON-ZERO did not deliver its work: that is a harness error, and the
+// provider that refused the work is the reason. Without this, a provider
+// refusal that produced no artifacts was classified contract_miss — the
+// agent's fault — and the provider was never cooled down, so every later
+// node kept hitting it.
+//
+// A zero exit with a missing artifact is still contract_miss: the agent ran
+// and produced the wrong thing, which is the agent's fault, not the
+// provider's.
+func Classify(rep *verify.Report, checkErr error, spawnErr error, timedOut bool, exitCode int) FailureClass {
 	if spawnErr != nil {
 		msg := strings.ToLower(spawnErr.Error())
 		if strings.Contains(msg, "not found") || strings.Contains(msg, "no such file") {
+			// The binary is missing. That is a LOCAL problem, not the
+			// provider's, so it must not cool a provider down.
 			return FailureHarnessMissing
 		}
 	}
@@ -35,6 +48,11 @@ func Classify(rep *verify.Report, checkErr error, spawnErr error, timedOut bool)
 		return FailureTimeout
 	}
 	if spawnErr != nil {
+		return FailureHarnessError
+	}
+	// The child ran and reported failure. That is the harness's fault, and
+	// the provider behind it usually is too.
+	if exitCode != 0 {
 		return FailureHarnessError
 	}
 	if checkErr != nil && artifactsOK(rep) {
@@ -77,6 +95,29 @@ func ShouldRetry(class FailureClass, attempts, maxAttempts int) bool {
 	}
 }
 
+// isProviderFailureClass reports whether a failure class is the PROVIDER's
+// fault, and therefore grounds for cooling that provider down.
+//
+// The set is small on purpose. harness_error and timeout mean the provider
+// refused the work or was too slow. Everything else is something else:
+//
+//   - contract_miss and check_failed are the AGENT's fault. Cooling the
+//     provider down for them would punish a healthy provider for one bad
+//     prompt and stall every other node that shares it.
+//   - harness_missing is a LOCAL problem: the binary is not installed.
+//   - cap_blocked, dep_blocked and discover_invalid are structural.
+//
+// The mirror of this predicate lives in internal/plan as
+// plan.IsProviderFailure, because the plan package cannot import this one.
+func isProviderFailureClass(c FailureClass) bool {
+	switch c {
+	case FailureHarnessError, FailureTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 // FailureSummary returns a one-line human description of a class.
 func FailureSummary(c FailureClass) string {
 	switch c {
@@ -85,7 +126,7 @@ func FailureSummary(c FailureClass) string {
 	case FailureHarnessMissing:
 		return "the harness binary was not found"
 	case FailureHarnessError:
-		return "the harness failed to run"
+		return "the harness failed"
 	case FailureTimeout:
 		return "the node timed out"
 	case FailureContractMiss:
