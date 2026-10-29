@@ -86,6 +86,9 @@ type Node struct {
 	Timeout     string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	MaxAttempts int    `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
 	Optional    bool   `yaml:"optional,omitempty" json:"optional,omitempty"`
+	// Hooks are the shell commands run before, after, and on failure of this
+	// node. A failing pre or post hook fails the node: the hook is contract.
+	Hooks *Hooks `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 
 	// Dynamic decomposition. Discover turns a verified artifact into a work
 	// set; FanOut marks this node as the template expanded from a parent's

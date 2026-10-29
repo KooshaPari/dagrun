@@ -19,6 +19,27 @@ import (
 	"github.com/KooshaPari/dagrun/internal/verify"
 )
 
+// failCtx carries the evidence Classify needs beyond the verify report: how the
+// child was started (or why it never was) and whether it ran out of clock.
+type failCtx struct {
+	spawnErr error
+	timedOut bool
+}
+
+// verdict is everything settling one node needs, gathered as the node runs.
+type verdict struct {
+	node     *plan.Node
+	epoch    int64
+	rep      verify.Report
+	exitCode int
+	start    time.Time
+	workdir  string
+	// captured is the tail of what the child printed, kept in memory so the
+	// harness's own token accounting can be read without re-reading the log.
+	captured []byte
+	fail     failCtx
+}
+
 func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx map[string]*plan.Node) {
 	start := time.Now()
 
@@ -33,7 +54,9 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 	if n.Isolation == IsolationWorktree {
 		wt, err := ensureWorktree(e.st.Root(), e.st.Dir(), e.st.Plan().Run, n)
 		if err != nil {
-			e.settleNode(n, epoch, verify.Report{NodeID: n.ID, Reason: err.Error()}, -1, start)
+			e.settleNode(ctx, verdict{node: n, epoch: epoch, exitCode: -1, start: start, workdir: workdir,
+				rep:  verify.Report{NodeID: n.ID, Reason: err.Error()},
+				fail: failCtx{spawnErr: err}})
 			return
 		}
 		workdir, vroot = wt.Path, wt.Path
@@ -45,37 +68,58 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 		fmt.Fprintf(e.opt.Out, "%s isolated on %s\n", n.ID, wt.Branch)
 	}
 
-	if n.Check != "" && len(n.Artifacts) == 0 {
-		rep := verify.Node(ctx, vroot, n)
-		e.settleNode(n, epoch, rep, 0, start)
+	// The pre hook runs before any work starts. A failing pre hook means the
+	// child is never spawned: the node's environment was not fit to run in.
+	if err := e.runHook(ctx, n, epoch, "pre", workdir); err != nil {
+		e.settleNode(ctx, verdict{node: n, epoch: epoch, exitCode: -1, start: start, workdir: workdir,
+			rep:  verify.Report{NodeID: n.ID, OK: false, Reason: err.Error()},
+			fail: failCtx{spawnErr: err}})
 		return
 	}
+
+	// A check-only node has no child: its evidence already exists on disk.
+	if n.Check != "" && len(n.Artifacts) == 0 {
+		e.settleNode(ctx, verdict{node: n, epoch: epoch, start: start, workdir: workdir,
+			rep: verify.Node(ctx, vroot, n)})
+		return
+	}
+
 	prompt := plan.Prompt(e.st.Plan(), n, idx)
 
 	name, args, useStdin, err := e.command(n, prompt, workdir)
 	if err != nil {
-		e.settleNode(n, epoch, verify.Report{NodeID: n.ID, OK: false, Reason: err.Error()}, -1, start)
+		e.settleNode(ctx, verdict{node: n, epoch: epoch, exitCode: -1, start: start, workdir: workdir,
+			rep:  verify.Report{NodeID: n.ID, OK: false, Reason: err.Error()},
+			fail: failCtx{spawnErr: err}})
 		return
 	}
 
 	logPath := filepath.Join(e.st.Dir(), "logs", trace.Name(n.ID), fmt.Sprintf("%d.log", time.Now().UnixNano()))
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		e.settleNode(n, epoch, verify.Report{NodeID: n.ID, Reason: err.Error()}, -1, start)
+		e.settleNode(ctx, verdict{node: n, epoch: epoch, exitCode: -1, start: start, workdir: workdir,
+			rep:  verify.Report{NodeID: n.ID, Reason: err.Error()},
+			fail: failCtx{spawnErr: err}})
 		return
 	}
 	logFile, err := os.Create(logPath)
 	if err != nil {
-		e.settleNode(n, epoch, verify.Report{NodeID: n.ID, Reason: err.Error()}, -1, start)
+		e.settleNode(ctx, verdict{node: n, epoch: epoch, exitCode: -1, start: start, workdir: workdir,
+			rep:  verify.Report{NodeID: n.ID, Reason: err.Error()},
+			fail: failCtx{spawnErr: err}})
 		return
 	}
 	defer logFile.Close()
+
+	// The log file is the durable record; the sink also keeps the tail in
+	// memory, which is where the harness prints its usage object.
+	sink := newLogSink(logFile)
 
 	cctx, cancel := context.WithTimeout(ctx, n.TimeoutDuration())
 	defer cancel()
 	cmd := exec.CommandContext(cctx, name, args...)
 	cmd.Dir = workdir
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd.Stdout = sink
+	cmd.Stderr = sink
 	cmd.Env = childEnv()
 	if useStdin {
 		cmd.Stdin = strings.NewReader(prompt)
@@ -97,11 +141,15 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 	runErr := cmd.Run()
 	hbCancel()
 	exitCode := 0
+	var spawnErr error
 	if runErr != nil {
 		if ee, ok := runErr.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
 		} else {
+			// Not a non-zero exit: the binary never ran. That is a different
+			// failure class from "the agent ran and produced the wrong thing".
 			exitCode = -1
+			spawnErr = runErr
 		}
 	}
 	_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID, Event: "node.exit",
@@ -109,13 +157,23 @@ func (e *Executor) execute(ctx context.Context, n *plan.Node, epoch int64, idx m
 
 	select {
 	case <-lost:
-		// ownership gone: do not touch state
+		// ownership gone: do not touch state. A killed child is a failed
+		// attempt for whoever adopts the node next, not a result.
 		return
 	default:
 	}
 
 	rep := verify.Node(ctx, vroot, n)
-	e.settleNode(n, epoch, rep, exitCode, start)
+	e.settleNode(ctx, verdict{
+		node:     n,
+		epoch:    epoch,
+		rep:      rep,
+		exitCode: exitCode,
+		start:    start,
+		workdir:  workdir,
+		captured: sink.tail.Bytes(),
+		fail:     failCtx{spawnErr: spawnErr, timedOut: cctx.Err() == context.DeadlineExceeded},
+	})
 }
 
 // command picks the executable. Precedence: an explicit --exec-template wins
@@ -170,14 +228,52 @@ func (e *Executor) heartbeatLoop(ctx context.Context, nodeID string, epoch int64
 	}
 }
 
-func (e *Executor) settleNode(n *plan.Node, epoch int64, rep verify.Report, exitCode int, start time.Time) {
+// settle records one node's outcome: usage and duration first, then the
+// contract hooks, then the status with the retry policy applied.
+//
+// The order is deliberate. Usage is measured rather than asserted. A post hook
+// can still turn a verified node into a failure, so the failure class is
+// computed after the hooks have run. And the class decides whether "pending"
+// (retry) or "failed" is written, so the status comes last.
+func (e *Executor) settleNode(ctx context.Context, v verdict) {
+	n, epoch := v.node, v.epoch
+	e.recordUsage(n, epoch, v.captured, time.Since(v.start))
+
+	rep := v.rep
+	fail := v.fail
+	if rep.OK {
+		if err := e.runHook(ctx, n, epoch, "post", v.workdir); err != nil {
+			// The hook is part of the contract: artifacts that verify but a
+			// post hook that fails is not a delivered node. It classifies as
+			// a contract miss rather than a harness error, because the child
+			// itself did run and did produce its artifacts.
+			rep.OK = false
+			rep.Reason = err.Error()
+			fail = failCtx{}
+		}
+	}
+
+	class := FailureNone
+	if !rep.OK {
+		class = Classify(&rep, checkErr(rep), fail.spawnErr, fail.timedOut)
+		if _, err := e.st.SetFailureClass(n.ID, e.opt.Owner, epoch, string(class)); err != nil {
+			e.setErr(err)
+		}
+		if err := e.runHook(ctx, n, epoch, "on_fail", v.workdir); err != nil {
+			// The node already failed. A broken cleanup is reported, never
+			// promoted over the failure that came first.
+			fmt.Fprintf(e.opt.Out, "on_fail hook for %s also failed: %v\n", n.ID, err)
+		}
+	}
+
 	status := plan.StatusDone
 	reason := ""
 	if !rep.OK {
-		status = plan.StatusPending // retry, then failed when attempts run out
 		reason = rep.Reason
+		status = e.retryOrFail(n, class)
 	}
-	ok, err := e.st.Finish(n.ID, e.opt.Owner, epoch, status, &rep, exitCode, reason, time.Now())
+
+	ok, err := e.st.Finish(n.ID, e.opt.Owner, epoch, status, &rep, v.exitCode, reason, time.Now())
 	if err != nil {
 		e.setErr(err)
 		return
@@ -186,11 +282,46 @@ func (e *Executor) settleNode(n *plan.Node, epoch int64, rep verify.Report, exit
 		_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID, Event: "lease.lost", Epoch: epoch})
 		return
 	}
-	if rep.OK {
-		fmt.Fprintf(e.opt.Out, "done %s (%s) %dms\n", n.ID, n.Kind, time.Since(start).Milliseconds())
-	} else {
-		fmt.Fprintf(e.opt.Out, "retry %s: %s\n", n.ID, rep.Reason)
+	switch {
+	case rep.OK:
+		fmt.Fprintf(e.opt.Out, "done %s (%s) %dms\n", n.ID, n.Kind, time.Since(v.start).Milliseconds())
+	case status == plan.StatusFailed:
+		fmt.Fprintf(e.opt.Out, "fail %s (%s): %s\n", n.ID, FailureSummary(class), rep.Reason)
+	default:
+		fmt.Fprintf(e.opt.Out, "retry %s (%s): %s\n", n.ID, FailureSummary(class), rep.Reason)
 	}
 	_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID, Event: "node." + status,
-		Epoch: epoch, Exit: &exitCode, DurMS: time.Since(start).Milliseconds(), Message: rep.Reason})
+		Epoch: epoch, Exit: &v.exitCode, DurMS: time.Since(v.start).Milliseconds(), Message: rep.Reason})
+}
+
+// retryOrFail applies the retry policy. A failed node goes back to pending only
+// when the cause is worth another attempt and the attempt budget allows it;
+// otherwise it is failed for good, so the scheduler stops picking it up.
+func (e *Executor) retryOrFail(n *plan.Node, class FailureClass) string {
+	attempts, known := e.st.Attempts(n.ID)
+	if !known {
+		// Unreadable state is not evidence against a retry: Claim still
+		// enforces the attempt budget, so a pending node cannot loop forever.
+		return plan.StatusPending
+	}
+	max := n.MaxAttempts
+	if max < 1 {
+		max = 1
+	}
+	if !ShouldRetry(class, attempts, max) {
+		return plan.StatusFailed
+	}
+	return plan.StatusPending
+}
+
+// checkErr turns a failing check result into the error Classify expects, so a
+// failed check is not mistaken for a contract miss.
+func checkErr(rep verify.Report) error {
+	if rep.Check == nil || rep.Check.OK {
+		return nil
+	}
+	if rep.Check.Output != "" {
+		return fmt.Errorf("check %s exited %d: %s", rep.Check.Command, rep.Check.ExitCode, rep.Check.Output)
+	}
+	return fmt.Errorf("check %s exited %d", rep.Check.Command, rep.Check.ExitCode)
 }

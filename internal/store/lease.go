@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/KooshaPari/dagrun/internal/harness"
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/verify"
 )
@@ -204,6 +205,60 @@ func (s *Store) Finish(nodeID, owner string, epoch int64, status string, rep *ve
 		return nil
 	})
 	return ok, err
+}
+
+// RecordUsage attaches the harness's token accounting and the measured wall
+// time to a node, guarded like every other mutator by owner+epoch.
+//
+// DurationMS is always written: it is measured here, not reported by the child,
+// and a node that printed no accounting still took time. Usage itself is only
+// written when the harness actually reported it, so a missing number never
+// becomes a fabricated zero.
+func (s *Store) RecordUsage(nodeID, owner string, epoch int64, u *harness.Usage, durMS int64) (bool, error) {
+	ok := false
+	err := s.With(func(st *State) error {
+		ns := st.Nodes[nodeID]
+		if ns == nil || ns.Owner != owner || ns.Epoch != epoch {
+			return nil
+		}
+		if u != nil {
+			ns.Usage = u
+		}
+		ns.DurationMS = durMS
+		ok = true
+		return nil
+	})
+	return ok, err
+}
+
+// SetFailureClass records why a node failed, so the retry policy acts on the
+// cause rather than on the symptom.
+func (s *Store) SetFailureClass(nodeID, owner string, epoch int64, class string) (bool, error) {
+	ok := false
+	err := s.With(func(st *State) error {
+		ns := st.Nodes[nodeID]
+		if ns == nil || ns.Owner != owner || ns.Epoch != epoch {
+			return nil
+		}
+		ns.FailureClass = class
+		ok = true
+		return nil
+	})
+	return ok, err
+}
+
+// Attempts reports how many times a node has been claimed. It is a read, used
+// by the executor to decide whether the attempt budget still allows a retry.
+func (s *Store) Attempts(nodeID string) (int, bool) {
+	st, err := s.Snapshot()
+	if err != nil || st == nil {
+		return 0, false
+	}
+	ns := st.Nodes[nodeID]
+	if ns == nil {
+		return 0, false
+	}
+	return ns.Attempts, true
 }
 
 // Force sets a status regardless of ownership. Used by `dagrun done|fail|skip`
