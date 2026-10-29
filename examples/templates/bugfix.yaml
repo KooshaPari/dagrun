@@ -1,0 +1,57 @@
+# Bugfix: a reported defect to a regression test plus a gated fix.
+#
+#   dagrun plan examples/templates/bugfix.yaml && dagrun run --workers 2
+#
+# INTENT -> SPEC -> TEST -> IMPL -> GATE. The regression test must fail first:
+# a fix with no failing test in front of it is not a fix.
+version: 1
+run: bugfix
+intent: "Take one reported defect to a fixed, tested, gated state."
+artifacts_root: artifacts
+max_parallel: 2
+defaults: {estimate: 10m, timeout: 20m, max_attempts: 2}
+nodes:
+  - id: "1.1"
+    kind: INTENT
+    role: intent
+    title: State the defect and what fixed means
+    artifacts:
+      - path: artifacts/INTENT.md
+        min_bytes: 400
+        must_contain: ["Acceptance Criteria"]
+  - id: "1.2"
+    kind: SPEC
+    role: spec
+    title: State the behaviour that should have happened
+    deps: ["1.1"]
+    artifacts:
+      - path: artifacts/SPEC.md
+        min_bytes: 500
+        must_contain: ["Requirement", "Scenario"]
+  - id: "2.1"
+    kind: TEST
+    role: impl
+    title: Reproduce the defect as a failing test
+    deps: ["1.2"]
+    artifacts:
+      - path: internal/bugfix/regression_test.go
+        min_bytes: 300
+      - path: artifacts/REPRO.txt
+        min_bytes: 100
+        must_contain: ["FAIL"]
+    check: "go test ./internal/bugfix/ -run Regression 2>&1 | tee artifacts/REPRO.txt | grep -q FAIL"
+  - id: "2.2"
+    kind: IMPL
+    role: impl
+    title: Fix the cause, not the symptom
+    deps: ["2.1"]
+    artifacts:
+      - path: internal/bugfix/fix.go
+        min_bytes: 200
+    check: "go test ./internal/bugfix/ -run Regression"
+  - id: "3.1"
+    kind: GATE
+    role: gate
+    title: Regression passes and nothing else broke
+    deps: ["2.2"]
+    check: "go build ./... && go test ./... >/dev/null"

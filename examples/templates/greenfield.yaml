@@ -1,0 +1,54 @@
+# Greenfield: a new feature from nothing to a gated change.
+#
+#   dagrun plan examples/templates/greenfield.yaml && dagrun run --workers 2
+#
+# INTENT -> SPEC -> TEST -> IMPL -> GATE. Contract frozen before code, the
+# failing test before the implementation, a gate before anyone says "done".
+version: 1
+run: greenfield
+intent: "Build <feature> from nothing to a working, tested, gated change."
+artifacts_root: artifacts
+max_parallel: 2
+defaults: {estimate: 10m, timeout: 20m, max_attempts: 2}
+nodes:
+  - id: "1.1"
+    kind: INTENT
+    role: intent
+    title: Freeze what "done" means
+    artifacts:
+      - path: artifacts/INTENT.md
+        min_bytes: 400
+        must_contain: ["Acceptance Criteria"]
+  - id: "1.2"
+    kind: SPEC
+    role: spec
+    title: Write the behavioural contract
+    deps: ["1.1"]
+    artifacts:
+      - path: artifacts/SPEC.md
+        min_bytes: 600
+        must_contain: ["Requirement", "Scenario"]
+  - id: "2.1"
+    kind: TEST
+    role: impl
+    title: Failing test that states the contract
+    deps: ["1.2"]
+    artifacts:
+      - path: internal/feature/feature_test.go
+        min_bytes: 300
+    check: "go test ./internal/feature/"
+  - id: "2.2"
+    kind: IMPL
+    role: impl
+    title: Implement until the test passes
+    deps: ["2.1"]
+    artifacts:
+      - path: internal/feature/feature.go
+        min_bytes: 400
+    check: "go build ./internal/feature/"
+  - id: "3.1"
+    kind: GATE
+    role: gate
+    title: Everything builds and the suite is green
+    deps: ["2.2"]
+    check: "go build ./... && go test ./... >/dev/null"

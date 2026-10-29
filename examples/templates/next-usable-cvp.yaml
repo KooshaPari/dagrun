@@ -1,0 +1,59 @@
+# Next usable CVP: "compiles and sort of works" -> safe to hand to someone else.
+#
+#   dagrun plan examples/templates/next-usable-cvp.yaml && dagrun run --workers 4
+#
+# The compact form of examples/next-cvp/plan.yaml (no research fan-out).
+version: 1
+run: next-usable-cvp
+intent: "Take a half-built CLI to installable, documented, tested, demoable."
+artifacts_root: artifacts
+max_parallel: 4
+defaults: {estimate: 10m, timeout: 20m, max_attempts: 2}
+nodes:
+  - id: "1.1"
+    kind: INTENT
+    role: intent
+    title: Freeze the scope of this checkpoint
+    artifacts:
+      - path: artifacts/INTENT.md
+        min_bytes: 400
+        must_contain: ["Acceptance Criteria"]
+  - id: "1.2"
+    kind: SPEC
+    role: spec
+    title: Write the behavioural contract for `dagrun run`
+    deps: ["1.1"]
+    artifacts:
+      - path: artifacts/SPEC.md
+        min_bytes: 600
+        must_contain: ["Requirement", "Scenario"]
+  - id: "2.1"
+    kind: TEST
+    deps: ["1.2"]
+    artifacts:
+      - path: internal/store/lease_test.go
+        min_bytes: 300
+    check: "go test ./internal/store/"
+  - id: "2.2"
+    kind: IMPL
+    title: Implement lease reclaim and epoch fencing
+    deps: ["2.1"]
+    artifacts:
+      - path: internal/store/lease.go
+        min_bytes: 800
+    check: "go build ./internal/store/"
+  - id: "3.1"
+    kind: DOC
+    role: docs
+    title: README a stranger can follow
+    deps: ["2.2"]
+    artifacts:
+      - path: README.md
+        min_bytes: 800
+        must_contain: ["dagrun"]
+  - id: "3.2"
+    kind: GATE
+    role: gate
+    title: Everything builds, the suite is green, the README exists
+    deps: ["3.1"]
+    check: "go build ./... && go test ./... >/dev/null && test -s README.md"

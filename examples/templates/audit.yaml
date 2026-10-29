@@ -1,0 +1,58 @@
+# Audit: a question answered with sourced research and a gated report.
+#
+#   dagrun plan examples/templates/audit.yaml && dagrun run --workers 2
+#
+# INTENT -> RESEARCH -> SOTA -> DOC -> GATE. The report is only as good as the
+# sources behind it, so the research node cannot pass on a single link and the
+# SOTA node cannot pass without a verdict.
+version: 1
+run: audit
+intent: "Answer <question> with sourced findings and a recommendation."
+artifacts_root: artifacts
+max_parallel: 2
+role_caps: {research: 2}
+defaults: {estimate: 15m, timeout: 30m, max_attempts: 2}
+nodes:
+  - id: "1.1"
+    kind: INTENT
+    role: intent
+    title: Freeze the question and what an answer must contain
+    artifacts:
+      - path: artifacts/INTENT.md
+        min_bytes: 400
+        must_contain: ["Acceptance Criteria"]
+  - id: "1.2"
+    kind: RESEARCH
+    role: research
+    title: Collect primary sources on the question
+    deps: ["1.1"]
+    artifacts:
+      - path: artifacts/RESEARCH.md
+        min_bytes: 800
+        must_contain: ["Decision", "Alternatives"]
+    check: "test $(grep -Eo 'https?://[^ )>]+' artifacts/RESEARCH.md | sort -u | wc -l | tr -d ' ') -ge 2"
+  - id: "1.3"
+    kind: SOTA
+    role: research
+    title: Compare the candidates on the axes that matter
+    deps: ["1.1", "1.2"]
+    artifacts:
+      - path: artifacts/SOTA.md
+        min_bytes: 600
+        must_contain: ["Verdict"]
+    check: "test $(grep -c '^- \\*\\*' artifacts/SOTA.md) -ge 2"
+  - id: "1.4"
+    kind: DOC
+    role: docs
+    title: Write the findings a reader can act on
+    deps: ["1.3"]
+    artifacts:
+      - path: artifacts/REPORT.md
+        min_bytes: 800
+        must_contain: ["Findings"]
+  - id: "1.5"
+    kind: GATE
+    role: gate
+    title: The report cites sources and states a verdict
+    deps: ["1.4"]
+    check: "test -s artifacts/REPORT.md && grep -qi verdict artifacts/SOTA.md"

@@ -1,0 +1,49 @@
+# Migration: a schema or data change, planned before it is applied.
+#
+#   dagrun plan examples/templates/migration.yaml && dagrun run --workers 1
+#
+# INTENT -> PLAN -> IMPL -> GATE. A migration inherits a PLAN, not a SPEC: the
+# contract is the ordered steps, their rollback, and the data they move.
+# (dagrun lint reports `impl_no_spec` here by design; a migration has no SPEC.)
+version: 1
+run: migration
+intent: "Move <data or schema> to the new shape with a rehearsed rollback."
+artifacts_root: artifacts
+max_parallel: 1
+defaults: {estimate: 10m, timeout: 20m, max_attempts: 1}
+nodes:
+  - id: "1.1"
+    kind: INTENT
+    role: intent
+    title: Freeze the target state and the blast radius
+    artifacts:
+      - path: artifacts/INTENT.md
+        min_bytes: 400
+        must_contain: ["Acceptance Criteria"]
+  - id: "1.2"
+    kind: PLAN
+    role: spec
+    title: Ordered steps, backfill, and rollback
+    deps: ["1.1"]
+    artifacts:
+      - path: artifacts/PLAN.md
+        min_bytes: 600
+        must_contain: ["Rollback"]
+  - id: "1.3"
+    kind: IMPL
+    role: impl
+    title: Write and rehearse the migration
+    deps: ["1.2"]
+    artifacts:
+      - path: migrations/*.sql
+        min_count: 1
+      - path: artifacts/REHEARSAL.md
+        min_bytes: 200
+        must_contain: ["Rollback"]
+    check: "ls migrations/*.sql >/dev/null"
+  - id: "1.4"
+    kind: GATE
+    role: gate
+    title: Migration applies and rolls back cleanly
+    deps: ["1.3"]
+    check: "test -s artifacts/REHEARSAL.md && go build ./... >/dev/null"

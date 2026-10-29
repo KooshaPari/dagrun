@@ -1,0 +1,53 @@
+# Lint sweep: a tool produces the work list, dagrun produces the nodes.
+#
+#   dagrun plan examples/templates/lint-sweep.yaml
+#   dagrun run --exec-template 'sh examples/fake-agent.sh {prompt}'
+#
+# The fan-out shape from examples/lint-fanout/plan.yaml, with an INTENT in
+# front of it: discover -> one node per unit -> a reduce that asserts the whole
+# set was handled. The node count is not known at plan time.
+version: 1
+run: lint-sweep
+intent: "Bring every file the linter reports to clean, one file per node."
+artifacts_root: artifacts
+max_parallel: 4
+max_dynamic: 50
+defaults: {estimate: 2m, timeout: 10m, max_attempts: 2}
+nodes:
+  - id: "1.1"
+    kind: INTENT
+    role: intent
+    title: Freeze what "clean" means for this sweep
+    artifacts:
+      - path: artifacts/INTENT.md
+        min_bytes: 300
+        must_contain: ["Acceptance Criteria"]
+  # --- discover: the work list is an artifact, so it is verified and reused ---
+  - id: "1.2"
+    kind: GATE
+    role: discover
+    title: list the files the linter reports
+    deps: ["1.1"]
+    estimate: 1m
+    check: "mkdir -p artifacts && gofmt -l . > artifacts/unformatted.txt"
+    artifacts:
+      - path: artifacts/unformatted.txt
+        allow_empty: true # no findings is the good outcome
+    discover: {from: artifacts/unformatted.txt, format: lines, max: 50}
+  # --- map: one node per unit, ids become 1.3/<slug> ---
+  - id: "1.3"
+    kind: CODE
+    role: impl
+    title: "handle {{unit}}"
+    fan_out: "1.2"
+    artifacts:
+      - path: "artifacts/gofmt/{{slug}}.txt"
+        min_bytes: 1
+    check: "test -f {{unit}}"
+  # --- reduce: depends on every child, so it cannot run early ---
+  - id: "1.4"
+    kind: GATE
+    role: gate
+    title: every reported file was handled
+    fan_in: "1.2"
+    check: "test $(ls artifacts/gofmt/*.txt 2>/dev/null | wc -l | tr -d ' ') -eq $(wc -l < artifacts/unformatted.txt | tr -d ' ')"
