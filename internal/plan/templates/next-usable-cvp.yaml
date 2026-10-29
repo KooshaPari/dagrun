@@ -1,6 +1,6 @@
 # Next usable CVP: "compiles and sort of works" -> safe to hand to someone else.
 #
-#   dagrun plan examples/templates/next-usable-cvp.yaml && dagrun run --workers 4
+#   dagrun template next-usable-cvp.yaml && dagrun run --workers 4
 #
 # The compact form of examples/next-cvp/plan.yaml (no research fan-out).
 version: 1

@@ -1,6 +1,6 @@
 # Lint sweep: a tool produces the work list, dagrun produces the nodes.
 #
-#   dagrun plan examples/templates/lint-sweep.yaml
+#   dagrun template lint-sweep.yaml
 #   dagrun run --exec-template 'sh examples/fake-agent.sh {prompt}'
 #
 # The fan-out shape from examples/lint-fanout/plan.yaml, with an INTENT in

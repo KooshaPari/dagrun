@@ -1,6 +1,6 @@
 # Greenfield: a new feature from nothing to a gated change.
 #
-#   dagrun plan examples/templates/greenfield.yaml && dagrun run --workers 2
+#   dagrun template greenfield.yaml && dagrun run --workers 2
 #
 # INTENT -> SPEC -> TEST -> IMPL -> GATE. Contract frozen before code, the
 # failing test before the implementation, a gate before anyone says "done".

@@ -1,6 +1,6 @@
 # Audit: a question answered with sourced research and a gated report.
 #
-#   dagrun plan examples/templates/audit.yaml && dagrun run --workers 2
+#   dagrun template audit.yaml && dagrun run --workers 2
 #
 # INTENT -> RESEARCH -> SOTA -> DOC -> GATE. The report is only as good as the
 # sources behind it, so the research node cannot pass on a single link and the

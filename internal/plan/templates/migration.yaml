@@ -1,10 +1,10 @@
 # Migration: a schema or data change, planned before it is applied.
 #
-#   dagrun plan examples/templates/migration.yaml && dagrun run --workers 1
+#   dagrun template migration.yaml && dagrun run --workers 1
 #
 # INTENT -> PLAN -> IMPL -> GATE. A migration inherits a PLAN, not a SPEC: the
 # contract is the ordered steps, their rollback, and the data they move.
-# (dagrun lint reports `impl_no_spec` here by design; a migration has no SPEC.)
+# dagrun lint accepts a PLAN as the contract for an IMPL, so this template is clean.
 version: 1
 run: migration
 intent: "Move <data or schema> to the new shape with a rehearsed rollback."

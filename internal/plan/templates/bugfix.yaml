@@ -1,6 +1,6 @@
 # Bugfix: a reported defect to a regression test plus a gated fix.
 #
-#   dagrun plan examples/templates/bugfix.yaml && dagrun run --workers 2
+#   dagrun template bugfix.yaml && dagrun run --workers 2
 #
 # INTENT -> SPEC -> TEST -> IMPL -> GATE. The regression test must fail first:
 # a fix with no failing test in front of it is not a fix.

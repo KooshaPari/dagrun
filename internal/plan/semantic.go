@@ -49,11 +49,15 @@ func (p *Plan) SemanticIssues() []Issue {
 	}
 
 	// 2. impl_no_spec: an IMPL whose contract is never stated upstream.
+	//
+	// A SPEC is the usual contract, but a PLAN is a legitimate one too: a
+	// migration's contract is its ordered steps and its rollback. Only an IMPL
+	// with neither is a genuine finding.
 	for _, n := range nodes {
 		if n.Kind != "IMPL" {
 			continue
 		}
-		if semHasAncestorKind(byID, n, "SPEC") {
+		if semHasAncestorKind(byID, n, "SPEC") || semHasAncestorKind(byID, n, "PLAN") {
 			continue
 		}
 		add(n.ID, "impl_no_spec",
