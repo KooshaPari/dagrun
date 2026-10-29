@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/workspace"
@@ -22,6 +27,14 @@ func cmdWorkspace(args []string) error {
 	dir := fs.String("dir", defaultDir, "workspace rollup directory")
 	validateOnly := fs.Bool("validate", false, "report per-repo plan status without installing")
 	jsonOut := fs.Bool("json", false, "machine-readable output on stdout")
+	runNow := fs.Bool("run", false, "execute the workspace as one DAG across every repo")
+	workers := fs.Int("workers", 4, "concurrent nodes across ALL repos (global cap)")
+	lease := fs.Duration("lease", 2*time.Minute, "lease duration per node")
+	dryRun := fs.Bool("dry-run", false, "with --run: report what would run, execute nothing")
+	reset := fs.Bool("reset", false, "with --run: discard existing per-repo progress")
+	verbose := fs.Bool("verbose", false, "with --run: log spawns")
+	execTemplate := fs.String("exec-template", "", "with --run: command template for every node, e.g. 'mytool --prompt {prompt}'")
+	tools := fs.String("tools", "", "with --run: comma-separated tool allow-list")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -50,6 +63,43 @@ func cmdWorkspace(args []string) error {
 
 	statuses := make([]repoStatus, 0, len(w.Repos))
 	failed := false
+
+	// --run executes the workspace as one DAG. Order comes from the combined
+	// plan; every node is claimed, executed and finished in its own repo's
+	// store, so each repo keeps its own progress.
+	if *runNow {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		sum, err := w.Run(ctx, workspace.RunOptions{
+			Workers:      *workers,
+			Owner:        ownerOrDefault(""),
+			Lease:        *lease,
+			DryRun:       *dryRun,
+			Verbose:      *verbose,
+			Out:          os.Stderr,
+			Reset:        *reset,
+			ExecTemplate: *execTemplate,
+			Tools:        splitList(*tools),
+		})
+		if *jsonOut {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(sum)
+		} else {
+			fmt.Printf("\nworkspace %s: repos=%d done=%d failed=%d skipped=%d pending=%d\n",
+				w.Name, sum.Repos, sum.Done, sum.Failed, sum.Skipped, sum.Pending)
+			if len(sum.Remaining) > 0 {
+				fmt.Printf("remaining: %s\n", strings.Join(sum.Remaining, ", "))
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if sum.Failed > 0 || sum.Pending > 0 {
+			return fmt.Errorf("%d node(s) did not complete", sum.Failed+sum.Pending)
+		}
+		return nil
+	}
 
 	for _, r := range w.Repos {
 		st := repoStatus{
