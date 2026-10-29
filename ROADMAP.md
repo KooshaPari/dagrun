@@ -20,14 +20,14 @@ closed. The single open validation cell is a live harness spawn.
 ```
 1.0  VERIFIED AUTONOMY ......................... PARTIAL trust an unattended run
 2.0  FLEET CONCURRENCY ......................... PARTIAL 20 agents x 4 workers, one repo
-3.0  PLAN AUTHORING ............................ NEXT    intent -> validated DAG
-4.0  CONTRACTS THAT CATCH SLOP ................. NEXT    beyond exists-and-nonempty
+3.0  PLAN AUTHORING ............................ PARTIAL draft shipped v0.5.0
+4.0  CONTRACTS THAT CATCH SLOP ................. PARTIAL explain shipped v0.5.0
 5.0  TRACE AS A PRODUCT ........................ LATER   Tracera natively, humans fast
 6.0  AGILEPLUS INTEROP ......................... LATER   a run becomes a feature
-7.0  MULTI-REPO INTENTS ........................ LATER   one DAG across repos
-8.0  EXTENSIBILITY SURFACES .................... NEXT    MCP, skills, hooks
-9.0  OPERATIONAL HARDENING ..................... LATER   never wedges
-10.0 DECISION QUALITY .......................... LATER   shrink wrong-DAG risk
+7.0  MULTI-REPO INTENTS ........................ PARTIAL workspace shipped v0.5.0
+8.0  EXTENSIBILITY SURFACES .................... PARTIAL MCP shipped v0.4.0
+9.0  OPERATIONAL HARDENING ..................... PARTIAL doctor+gc shipped v0.5.0
+10.0 DECISION QUALITY .......................... PARTIAL --by-cvp shipped v0.5.0
 ```
 
 ## 1.0 VERIFIED AUTONOMY — can an operator walk away?
