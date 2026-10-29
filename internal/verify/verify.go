@@ -112,6 +112,10 @@ func checkArtifact(root string, a plan.Artifact) ArtifactResult {
 			res.Code, res.Detail = "bad_glob", err.Error()
 			return res
 		}
+		if err := checkGlobCap(matches); err != nil {
+			res.Code, res.Detail = "too_many_matches", err.Error()+"; narrow the pattern"
+			return res
+		}
 		files = matches
 	} else {
 		if _, err := os.Stat(target); err != nil {
@@ -178,6 +182,10 @@ func checkArtifact(root string, a plan.Artifact) ArtifactResult {
 		return res
 	}
 	for _, want := range a.MustContain {
+		if err := checkMustContainLen(want); err != nil {
+			res.Code, res.Detail = "must_contain_too_long", err.Error()
+			return res
+		}
 		if !strings.Contains(body, want) {
 			res.Code = "missing_text"
 			res.Detail = fmt.Sprintf("does not contain %q", want)
@@ -186,6 +194,12 @@ func checkArtifact(root string, a plan.Artifact) ArtifactResult {
 		res.Matches = append(res.Matches, want)
 	}
 	if a.MustMatch != "" {
+		// cap before compiling: a multi-kilobyte pattern is a ReDoS-shaped
+		// risk and must never reach the regexp engine
+		if err := checkMustMatchLen(a.MustMatch); err != nil {
+			res.Code, res.Detail = "regex_too_long", err.Error()
+			return res
+		}
 		re, err := regexp.Compile(a.MustMatch)
 		if err != nil {
 			res.Code, res.Detail = "bad_regex", err.Error()
