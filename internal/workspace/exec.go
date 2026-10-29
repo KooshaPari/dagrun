@@ -1,203 +1,100 @@
+// Package workspace runs one intent across several repositories.
+//
+// The scheduling decision belongs to the workspace: only it can see that a node
+// in "web" depends on a node in "api". The execution machinery belongs to
+// internal/run: worktree isolation, hooks, fan-out expansion, usage capture,
+// failure classification and retries all live there.
+//
+// So the workspace runs one internal/run executor per repo, and each executor
+// asks the workspace whether its node may start. That keeps a single
+// implementation of the hard parts rather than two that drift.
 package workspace
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/KooshaPari/dagrun/internal/harness"
 	"github.com/KooshaPari/dagrun/internal/plan"
+	"github.com/KooshaPari/dagrun/internal/run"
 	"github.com/KooshaPari/dagrun/internal/store"
-	"github.com/KooshaPari/dagrun/internal/verify"
+	"github.com/KooshaPari/dagrun/internal/trace"
 )
 
-// DefaultRunDir is the per-repo run directory, relative to the repo root.
-const DefaultRunDir = ".dagrun"
-
-// repoRuntime is one repo's opened run, as the workspace executor sees it.
-//
-// The combined plan is the source of ORDER; this plan is the source of the
-// node CONTRACT (prompt, artifacts, check, timeout) and this root is what its
-// artifact paths resolve against.
+// repoRuntime is one repo's plan, store and trace within a workspace run.
 type repoRuntime struct {
 	repo  Repo
 	root  string
 	dir   string
 	plan  *plan.Plan
 	store *store.Store
-}
-
-// repoForNamespaced resolves a namespaced id ("web/2.1") to its owning repo and
-// the local id inside that repo ("2.1").
-func (w *Workspace) repoForNamespaced(id string) (Repo, string, bool) {
-	for _, r := range w.Repos {
-		prefix := w.Prefix(r) + "/"
-		if strings.HasPrefix(id, prefix) {
-			return r, strings.TrimPrefix(id, prefix), true
-		}
-	}
-	return Repo{}, "", false
-}
-
-// NodeOwner resolves a namespaced id to the repo that owns it and the node as
-// that repo's own plan declares it.
-//
-// The returned repoPath is the repo root, which is what the node's artifact
-// paths resolve against. The node is the local node of record, never the
-// synthetic combined-plan copy, so a scheduler can execute the real contract.
-func (w *Workspace) NodeOwner(combined *plan.Plan, id string) (repoPath string, node *plan.Node, ok bool) {
-	if combined != nil {
-		known := false
-		for _, n := range combined.Nodes {
-			if n != nil && n.ID == id {
-				known = true
-				break
-			}
-		}
-		if !known {
-			return "", nil, false
-		}
-	}
-	repo, local, found := w.repoForNamespaced(id)
-	if !found {
-		return "", nil, false
-	}
-	p, err := plan.Load(w.PlanPath(repo))
-	if err != nil {
-		return "", nil, false
-	}
-	n := p.ByID(local)
-	if n == nil {
-		return "", nil, false
-	}
-	return w.RepoRoot(repo), n, true
-}
-
-// ReadyNodes returns the namespaced ids that may start now.
-//
-// states is keyed by absolute repo root and holds each repo's own run state.
-// A node is ready only when it is pending in its own store AND every dependency
-// the COMBINED plan names is done or skipped, in whichever repo owns it. That
-// last clause is the whole point: a node in "web" cannot start while the "api"
-// node it depends on is unfinished.
-func (w *Workspace) ReadyNodes(combined *plan.Plan, states map[string]*store.State) []string {
-	var out []string
-	if combined == nil {
-		return out
-	}
-	for _, n := range combined.Sorted() {
-		if n == nil || n.FanOut != "" {
-			continue // a fan_out template is executed as its children
-		}
-		repo, local, ok := w.repoForNamespaced(n.ID)
-		if !ok {
-			continue
-		}
-		st := states[w.RepoRoot(repo)]
-		if st == nil {
-			continue
-		}
-		ns := st.Nodes[local]
-		if ns == nil || ns.Status != plan.StatusPending {
-			continue
-		}
-		if !depsDoneInWorkspace(w, n, states) {
-			continue
-		}
-		out = append(out, n.ID)
-	}
-	return out
-}
-
-// depsDoneInWorkspace reports whether every combined dependency is terminal.
-// An unresolvable or unreadable dependency is NOT done: a missing dependency
-// blocks rather than being silently treated as satisfied.
-func depsDoneInWorkspace(w *Workspace, n *plan.Node, states map[string]*store.State) bool {
-	for _, d := range n.Deps {
-		repo, local, ok := w.repoForNamespaced(d)
-		if !ok {
-			return false
-		}
-		st := states[w.RepoRoot(repo)]
-		if st == nil {
-			return false
-		}
-		ds := st.Nodes[local]
-		if ds == nil {
-			return false
-		}
-		if ds.Status != plan.StatusDone && ds.Status != plan.StatusSkipped {
-			return false
-		}
-	}
-	return true
+	trace *trace.Writer
+	exec  *run.Executor
 }
 
 // RunOptions configures a workspace run.
 type RunOptions struct {
-	Workers      int
-	Owner        string
-	Lease        time.Duration
-	DryRun       bool
-	Verbose      bool
+	// Workers is the GLOBAL cap across every repo, not a per-repo cap.
+	Workers int
+	Owner   string
+	Lease   time.Duration
+	DryRun  bool
+	Verbose bool
+	// ExecTemplate is the fallback command for nodes that name no harness.
 	ExecTemplate string
 	// Tools is the tool allow-list passed to each harness.
 	Tools []string
-	Out   io.Writer
+	Out   interface{ Write([]byte) (int, error) }
 	// RunDir is the per-repo run directory name, relative to each repo root.
 	RunDir string
 	// Reset discards existing progress in every repo.
 	Reset bool
-}
-
-func (o *RunOptions) normalize() {
-	if o.Workers < 1 {
-		o.Workers = 1
-	}
-	if o.Lease <= 0 {
-		o.Lease = 2 * time.Minute
-	}
-	if o.Out == nil {
-		o.Out = os.Stderr
-	}
-	if o.RunDir == "" {
-		o.RunDir = DefaultRunDir
-	}
-	if o.Owner == "" {
-		host, _ := os.Hostname()
-		if host == "" {
-			host = "host"
-		}
-		o.Owner = fmt.Sprintf("%s.%d", host, os.Getpid())
-	}
+	// MaxCostUSD caps the spend across every repo.
+	MaxCostUSD float64
+	// Once runs at most one node across the whole workspace.
+	Once bool
 }
 
 // RunSummary is the outcome of a workspace run.
 type RunSummary struct {
-	Repos     int      `json:"repos"`
-	Nodes     int      `json:"nodes"`
-	Done      int      `json:"done"`
-	Failed    int      `json:"failed"`
-	Skipped   int      `json:"skipped"`
-	Pending   int      `json:"pending"`
-	Ran       int      `json:"ran"`
+	Repos   int      `json:"repos"`
+	Done    int      `json:"done"`
+	Failed  int      `json:"failed"`
+	Skipped int      `json:"skipped"`
+	Pending int      `json:"pending"`
+	Adopted int      `json:"adopted"`
+	Ran     int      `json:"ran"`
+	Nodes   []string `json:"nodes,omitempty"`
+	// Remaining names the nodes that did not finish, namespaced.
 	Remaining []string `json:"remaining,omitempty"`
 }
 
-// Run executes one workspace as one DAG.
+// Run executes the workspace as one DAG.
 //
-// Order comes from the combined plan. Each node is claimed, executed, and
-// finished in its OWN repo's store, using that repo's plan and root, so every
-// repo keeps its own state. The worker cap is global, not per repo.
+// Each repo runs its own executor, so a repo's own plan remains the contract
+// for its nodes. The workspace decides the ORDER: a node may not start until
+// every dependency, in any repo, is terminal.
 func (w *Workspace) Run(ctx context.Context, opt RunOptions) (RunSummary, error) {
-	opt.normalize()
+	if opt.Workers < 1 {
+		opt.Workers = 4
+	}
+	if opt.Owner == "" {
+		opt.Owner = "workspace"
+	}
+	if opt.Lease <= 0 {
+		opt.Lease = 2 * time.Minute
+	}
+	if opt.RunDir == "" {
+		opt.RunDir = ".dagrun"
+	}
+	if opt.Out == nil {
+		opt.Out = os.Stderr
+	}
+
 	combined, _, err := w.CombinedPlan()
 	if err != nil {
 		return RunSummary{}, err
@@ -213,78 +110,162 @@ func (w *Workspace) Run(ctx context.Context, opt RunOptions) (RunSummary, error)
 		return RunSummary{}, err
 	}
 
+	// The cross-repo gate. A node in repo R may start only when every
+	// dependency named in the COMBINED plan is terminal, wherever it lives.
+	states := map[string]*store.State{}
+	var statesMu sync.Mutex
+	// refresh re-reads every repo's state. The gate must see the CURRENT state,
+	// not the state at startup: the api repo's node finishes while the web repo's
+	// executor is already polling, and a stale snapshot would keep the web node
+	// pending forever.
+	refresh := func() {
+		statesMu.Lock()
+		defer statesMu.Unlock()
+		for root, rt := range repos {
+			if st, err := rt.store.Snapshot(); err == nil {
+				states[root] = st
+			}
+		}
+	}
+
+	// A node that has not been claimed yet is neither done nor failed. The gate
+	// must treat "not there yet" as WAITABLE, or a repo whose executor has not
+	// started would look like a permanently broken dependency.
+	knownButUnfinished := func(root, local string) (status string, known bool) {
+		st := states[root]
+		if st == nil {
+			return "", false
+		}
+		ns := st.Nodes[local]
+		if ns == nil {
+			return "", false
+		}
+		return ns.Status, true
+	}
+
+	// gate reports (ready, waitable) for one node of one repo.
+	//
+	// waitable is the whole difference between a wait and a hang. A dependency
+	// that is merely not YET terminal may still be produced by another repo's
+	// executor, so the caller waits. A dependency that is already terminal and
+	// not done (failed or cancelled) can never become done, so no amount of
+	// waiting will open this gate; reporting waitable=false is what lets the
+	// executor fail the node instead of polling forever.
+	//
+	// refresh() takes statesMu and releases it before returning, so the second
+	// Lock below is a fresh acquisition, not a re-entrant one.
+	gate := func(ctx context.Context, ownerRoot, localID string) (bool, bool) {
+		refresh()
+		statesMu.Lock()
+		defer statesMu.Unlock()
+		for _, cn := range combined.Nodes {
+			if cn == nil {
+				continue
+			}
+			repo, local, ok := w.repoForNamespaced(cn.ID)
+			if !ok || local != localID || w.RepoRoot(repo) != ownerRoot {
+				continue
+			}
+			for _, d := range cn.Deps {
+				drepo, dlocal, ok := w.repoForNamespaced(d)
+				if !ok {
+					return false, false // an unresolvable dep blocks for good
+				}
+				status, known := knownButUnfinished(w.RepoRoot(drepo), dlocal)
+				if !known {
+					// The dependency is not known in that repo's state yet.
+					// It may not have been claimed, or it may be a fan_out
+					// child that does not exist until expansion. Either way,
+					// waiting is right and failing would be wrong.
+					return false, true
+				}
+				switch status {
+				case plan.StatusDone, plan.StatusSkipped:
+					continue
+				case plan.StatusFailed, plan.StatusCancelled:
+					return false, false // terminal and not done: never opens
+				}
+				return false, true // still in flight somewhere: wait
+			}
+			return true, true
+		}
+		return true, true
+	}
+
+	// A per-repo gate that also consults the workspace gate.
+	var workers int64
+	global := make(chan struct{}, opt.Workers)
+
 	var (
-		active  int64
-		wg      sync.WaitGroup
-		errMu   sync.Mutex
-		firstEr error
+		wg       sync.WaitGroup
+		errMu    sync.Mutex
+		firstErr error
 	)
 	setErr := func(e error) {
 		if e == nil {
 			return
 		}
 		errMu.Lock()
-		if firstEr == nil {
-			firstEr = e
+		if firstErr == nil {
+			firstErr = e
 		}
 		errMu.Unlock()
 	}
 
-	for {
-		if ctx.Err() != nil {
-			break
+	for _, rt := range repos {
+		rt := rt
+		repoGate := func(ctx context.Context, nodeID string) (bool, bool) {
+			return gate(ctx, rt.root, nodeID)
 		}
-		states, serr := snapshotAll(w, repos)
-		if serr != nil {
-			return RunSummary{}, serr
-		}
-		launched := 0
-		for _, id := range w.ReadyNodes(combined, states) {
-			if atomic.LoadInt64(&active) >= int64(opt.Workers) {
-				break
-			}
-			repo, local, ok := w.repoForNamespaced(id)
-			if !ok {
-				continue
-			}
-			rt := repos[w.RepoRoot(repo)]
-			if rt == nil {
-				continue
-			}
-			claim, cerr := rt.store.Claim(local, opt.Owner, opt.Lease, time.Now())
-			if cerr != nil {
-				setErr(cerr)
-				continue
-			}
-			if !claim.Won {
-				continue // another worker won it, or this repo's cap is full
-			}
-			atomic.AddInt64(&active, 1)
-			launched++
-			wg.Add(1)
-			go func(rt *repoRuntime, localID, namespaced string, epoch int64) {
-				defer wg.Done()
-				defer atomic.AddInt64(&active, -1)
-				if e := w.executeNode(ctx, rt, localID, namespaced, epoch, opt); e != nil {
-					setErr(e)
-				}
-			}(rt, local, id, claim.Epoch)
-			if opt.Workers == 1 {
-				break
+		// The global cap: a slot is held for as long as a node is in flight,
+		// across every repo. Acquire and Release are paired by the executor.
+		acquire := func() bool {
+			select {
+			case global <- struct{}{}:
+				atomic.AddInt64(&workers, 1)
+				return true
+			default:
+				return false
 			}
 		}
-		if launched == 0 && atomic.LoadInt64(&active) == 0 {
-			break // nothing running, nothing startable
+		release := func() {
+			select {
+			case <-global:
+				atomic.AddInt64(&workers, -1)
+			default:
+			}
 		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(100 * time.Millisecond):
-		}
+		rt.exec = run.New(rt.store, rt.trace, run.Options{
+			Workers:      1, // the workspace owns the global cap
+			Owner:        opt.Owner,
+			Lease:        opt.Lease,
+			Once:         opt.Once,
+			DryRun:       opt.DryRun,
+			Verbose:      opt.Verbose,
+			ExecTemplate: opt.ExecTemplate,
+			Tools:        opt.Tools,
+			Out:          opt.Out,
+			MaxCostUSD:   opt.MaxCostUSD,
+			Ready:        repoGate,
+			Acquire:      acquire,
+			Release:      release,
+		})
 	}
 
+	for _, rt := range repos {
+		rt := rt
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := rt.exec.Loop(ctx); err != nil {
+				setErr(err)
+			}
+		}()
+	}
 	wg.Wait()
+
 	sum, _ := w.summarize(repos)
-	return sum, firstEr
+	return sum, firstErr
 }
 
 // openRepos opens (and installs, if needed) the per-repo run directory.
@@ -321,23 +302,19 @@ func (w *Workspace) openRepos(opt RunOptions) (map[string]*repoRuntime, error) {
 		if serr != nil {
 			return nil, fmt.Errorf("%s: %w", r.Path, serr)
 		}
-		out[root] = &repoRuntime{repo: r, root: root, dir: dir, plan: p, store: st}
+		out[root] = &repoRuntime{
+			repo:  r,
+			root:  root,
+			dir:   dir,
+			plan:  p,
+			store: st,
+			trace: trace.New(filepath.Join(dir, "trace")),
+		}
 	}
 	return out, nil
 }
 
-func snapshotAll(w *Workspace, repos map[string]*repoRuntime) (map[string]*store.State, error) {
-	states := make(map[string]*store.State, len(repos))
-	for root, rt := range repos {
-		st, err := rt.store.Snapshot()
-		if err != nil {
-			return nil, err
-		}
-		states[root] = st
-	}
-	return states, nil
-}
-
+// summarize counts the outcome across every repo.
 func (w *Workspace) summarize(repos map[string]*repoRuntime) (RunSummary, error) {
 	sum := RunSummary{Repos: len(repos)}
 	for _, rt := range repos {
@@ -345,163 +322,31 @@ func (w *Workspace) summarize(repos map[string]*repoRuntime) (RunSummary, error)
 		if err != nil {
 			return sum, err
 		}
-		for _, n := range rt.plan.Nodes {
-			if n == nil || n.FanOut != "" {
-				continue
-			}
-			sum.Nodes++
+		for _, n := range rt.plan.Sorted() {
 			ns := st.Nodes[n.ID]
 			if ns == nil {
 				continue
 			}
+			sum.Nodes = append(sum.Nodes, n.ID)
 			switch ns.Status {
 			case plan.StatusDone:
 				sum.Done++
+				if ns.Attempts == 0 {
+					sum.Adopted++
+				}
 			case plan.StatusFailed:
 				sum.Failed++
 			case plan.StatusSkipped:
 				sum.Skipped++
-			case plan.StatusCancelled:
-				sum.Skipped++
+			case plan.StatusRunning:
+				sum.Ran++
 			default:
 				sum.Pending++
+			}
+			if ns.Status == plan.StatusFailed || ns.Status == plan.StatusPending || ns.Status == plan.StatusRunning {
 				sum.Remaining = append(sum.Remaining, w.Namespace(rt.repo, n.ID))
 			}
 		}
 	}
 	return sum, nil
-}
-
-// executeNode runs one node against its owning repo. It is the workspace's own
-// minimal executor: claim happened in the caller, finish happens here.
-func (w *Workspace) executeNode(ctx context.Context, rt *repoRuntime, localID, namespaced string, epoch int64, opt RunOptions) error {
-	start := time.Now()
-	n := rt.plan.ByID(localID)
-	if n == nil {
-		return fmt.Errorf("%s: node vanished from %s", namespaced, rt.plan.Run)
-	}
-	workdir := rt.root
-	if n.Workdir != "" {
-		workdir = filepath.Join(rt.root, n.Workdir)
-	}
-
-	if opt.DryRun {
-		fmt.Fprintf(opt.Out, "would run %s (%s) in %s\n", namespaced, n.Kind, rt.root)
-		_, err := rt.store.Finish(localID, opt.Owner, epoch, plan.StatusSkipped, nil, 0, "dry run", time.Now())
-		return err
-	}
-
-	// A check-only node has no child: its evidence already exists on disk.
-	if n.Check != "" && len(n.Artifacts) == 0 {
-		rep := verify.PlanNode(ctx, rt.root, n, rt.plan)
-		return w.settle(rt, n, namespaced, epoch, rep, 0, start, opt)
-	}
-
-	prompt := plan.Prompt(rt.plan, n, rt.plan.Index())
-	name, args, err := w.command(n, prompt, workdir, opt)
-	if err != nil {
-		return w.settle(rt, n, namespaced, epoch,
-			verify.Report{NodeID: n.ID, Reason: err.Error()}, -1, start, opt)
-	}
-
-	logDir := filepath.Join(rt.dir, "logs", plan.Slug(localID))
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return err
-	}
-	logPath := filepath.Join(logDir, fmt.Sprintf("%d.log", time.Now().UnixNano()))
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		return err
-	}
-	defer logFile.Close()
-
-	cctx, cancel := context.WithTimeout(ctx, n.TimeoutDuration())
-	defer cancel()
-	cmd := exec.CommandContext(cctx, name, args...)
-	cmd.Dir = workdir
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.Env = os.Environ()
-	if opt.Verbose {
-		fmt.Fprintf(opt.Out, "spawn %s -> %s %s\n", namespaced, name, strings.Join(args, " "))
-	}
-
-	runErr := cmd.Run()
-	exitCode := 0
-	reason := ""
-	if runErr != nil {
-		if ee, ok := runErr.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
-		} else {
-			exitCode = -1
-			reason = runErr.Error()
-		}
-	}
-
-	rep := verify.PlanNode(ctx, rt.root, n, rt.plan)
-	if reason != "" && rep.OK {
-		// The binary never ran, so nothing it claims can be trusted.
-		rep.OK = false
-		rep.Reason = reason
-	}
-	return w.settle(rt, n, namespaced, epoch, rep, exitCode, start, opt)
-}
-
-// command picks the executable for a node: harness when named, else the
-// template. There is no worktree isolation here; a workspace node runs in its
-// own repo checkout.
-func (w *Workspace) command(n *plan.Node, prompt, workdir string, opt RunOptions) (string, []string, error) {
-	explicit := opt.ExecTemplate != "" && (n.Harness == "exec" || n.Harness == "auto")
-	if !explicit && n.Harness != "exec" {
-		a, err := harness.Resolve(n.Harness)
-		if err == nil && a != nil {
-			path, args, cerr := a.Command(harness.Spec{
-				Prompt:   prompt,
-				Workdir:  workdir,
-				Provider: n.Provider,
-				Model:    n.Model,
-				Tools:    opt.Tools,
-			})
-			return path, args, cerr
-		}
-		if err != nil && opt.ExecTemplate == "" {
-			return "", nil, err
-		}
-	}
-	if opt.ExecTemplate == "" {
-		return "", nil, fmt.Errorf("node %s needs harness exec but no exec template is configured", n.ID)
-	}
-	name, args, _, err := harness.ExecCommand(opt.ExecTemplate, prompt, workdir, n.Model)
-	return name, args, err
-}
-
-// settle records the outcome in the owning repo's store. A failed node is
-// retried only while its attempt budget allows.
-func (w *Workspace) settle(rt *repoRuntime, n *plan.Node, namespaced string, epoch int64, rep verify.Report, exitCode int, start time.Time, opt RunOptions) error {
-	status := plan.StatusDone
-	reason := ""
-	if !rep.OK {
-		reason = rep.Reason
-		status = plan.StatusFailed
-		if n.MaxAttempts > 1 {
-			status = plan.StatusPending
-		}
-	}
-	ok, err := rt.store.Finish(n.ID, opt.Owner, epoch, status, &rep, exitCode, reason, time.Now())
-	if err != nil {
-		return err
-	}
-	if !ok {
-		fmt.Fprintf(opt.Out, "lost lease on %s; result discarded\n", namespaced)
-		return nil
-	}
-	switch status {
-	case plan.StatusDone:
-		fmt.Fprintf(opt.Out, "done %s (%s) %dms\n", namespaced, n.Kind, time.Since(start).Milliseconds())
-	case plan.StatusFailed:
-		fmt.Fprintf(opt.Out, "fail %s (%s): %s\n", namespaced, n.Kind, reason)
-	default:
-		fmt.Fprintf(opt.Out, "retry %s (%s): %s\n", namespaced, n.Kind, reason)
-	}
-	return nil
 }

@@ -7,12 +7,14 @@
 package run
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"time"
 
 	"github.com/KooshaPari/dagrun/internal/harness"
 	"github.com/KooshaPari/dagrun/internal/plan"
+	"github.com/KooshaPari/dagrun/internal/trace"
 )
 
 // captureLimit bounds the in-memory tail. Token accounting is printed at the
@@ -96,5 +98,27 @@ func (e *Executor) recordUsage(n *plan.Node, epoch int64, captured []byte, dur t
 	}
 	if !ok {
 		return // lease lost: the successor owns this node's record now
+	}
+	// Charge the run's budget. The rate comes from the plan when it names one,
+	// otherwise from the default table.
+	if u != nil {
+		rate := e.opt.Rate
+		if rate == (plan.Rate{}) {
+			rate = plan.DefaultRate(n.Model)
+		}
+		e.budgetMu.Lock()
+		e.budget.Add(plan.Spend{
+			InputTokens:     u.InputTokens,
+			OutputTokens:    u.OutputTokens,
+			CacheReadTokens: u.CacheReadTokens,
+		}, rate)
+		spent := e.budget.Spent
+		e.budgetMu.Unlock()
+		if e.budget.Exceeded() {
+			fmt.Fprintf(e.opt.Out, "budget spent: $%.2f of $%.2f; no further nodes will be claimed\n",
+				spent, e.opt.MaxCostUSD)
+			_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner,
+				Event: "budget.spent", Message: fmt.Sprintf("spent=%.2f max=%.2f", spent, e.opt.MaxCostUSD)})
+		}
 	}
 }

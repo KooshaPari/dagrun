@@ -22,6 +22,7 @@ nodes:
       - path: artifacts/INTENT.md
         min_bytes: 300
         must_contain: ["Acceptance Criteria"]
+        must_match: '(?m)(?:^- .*\n){3}'
   # --- discover: the work list is an artifact, so it is verified and reused ---
   - id: "1.2"
     kind: GATE

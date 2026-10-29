@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/store"
@@ -143,6 +144,32 @@ func cmdStats(args []string) error {
 	}
 	fmt.Printf("\ntotal node time: %s (measured on %d node(s), %d without a recorded duration)\n",
 		msOrDash(int64(sumAll(durs))), len(durs), noDuration)
+
+	// Estimate calibration: how far the plan's estimates are from reality.
+	var obs []plan.Observation
+	for _, n := range p.Sorted() {
+		ns := snap.Nodes[n.ID]
+		if ns == nil || ns.DurationMS <= 0 {
+			continue
+		}
+		obs = append(obs, plan.Observation{
+			NodeID:   n.ID,
+			Kind:     n.Kind,
+			Estimate: n.EstimateDuration(),
+			Actual:   time.Duration(ns.DurationMS) * time.Millisecond,
+			Attempts: ns.Attempts,
+			Adopted:  ns.Attempts == 0,
+		})
+	}
+	if len(obs) > 0 {
+		cal := plan.Calibrate(obs)
+		fmt.Printf("\nestimate calibration\n%s\n", cal.Drift())
+	}
+
+	// The budget.
+	if p.MaxCostUSD > 0 {
+		fmt.Printf("\nbudget: $%.2f of $%.2f spent\n", tokensToUSD(tokensIn, tokensOut, tokensTotal, p.Run), p.MaxCostUSD)
+	}
 	if usageReported > 0 {
 		fmt.Printf("tokens: %d in, %d out, %d total (reported by %d node(s))\n",
 			tokensIn, tokensOut, tokensTotal, usageReported)
@@ -190,6 +217,15 @@ func msOrDash(ms int64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%dms", ms)
+}
+
+// tokensToUSD estimates spend from tokens using the default rate table.
+func tokensToUSD(in, out, total int, run string) float64 {
+	rate, ok := plan.DefaultRates[run]
+	if !ok {
+		rate = plan.Rate{InputPerMillion: 3, OutputPerMillion: 15}
+	}
+	return plan.Cost(plan.Spend{InputTokens: in, OutputTokens: out}, rate)
 }
 
 var _ = filepath.Join

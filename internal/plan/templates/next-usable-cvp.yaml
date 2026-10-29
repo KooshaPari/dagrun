@@ -18,6 +18,7 @@ nodes:
       - path: artifacts/INTENT.md
         min_bytes: 400
         must_contain: ["Acceptance Criteria"]
+        must_match: '(?m)(?:^- .*\n){3}'
   - id: "1.2"
     kind: SPEC
     role: spec
@@ -27,6 +28,7 @@ nodes:
       - path: artifacts/SPEC.md
         min_bytes: 600
         must_contain: ["Requirement", "Scenario"]
+        must_match: '(?im)^[#*\-\s0-9.)]*Requirement[\s\S]*^[#*\-\s0-9.)]*Scenario'
   - id: "2.1"
     kind: TEST
     deps: ["1.2"]
@@ -48,6 +50,8 @@ nodes:
     title: README a stranger can follow
     deps: ["2.2"]
     artifacts:
+      # The DOC kind contract rejects broken relative links: link only to files
+      # that exist in the repo, and use https URLs for anything external.
       - path: README.md
         min_bytes: 800
         must_contain: ["dagrun"]

@@ -35,6 +35,7 @@ func cmdWorkspace(args []string) error {
 	verbose := fs.Bool("verbose", false, "with --run: log spawns")
 	execTemplate := fs.String("exec-template", "", "with --run: command template for every node, e.g. 'mytool --prompt {prompt}'")
 	tools := fs.String("tools", "", "with --run: comma-separated tool allow-list")
+	maxCost := fs.Float64("max-cost", 0, "with --run: cost ceiling in USD across ALL repos")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -80,6 +81,7 @@ func cmdWorkspace(args []string) error {
 			Reset:        *reset,
 			ExecTemplate: *execTemplate,
 			Tools:        splitList(*tools),
+			MaxCostUSD:   *maxCost,
 		})
 		if *jsonOut {
 			enc := json.NewEncoder(os.Stdout)

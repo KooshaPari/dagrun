@@ -19,6 +19,7 @@ nodes:
       - path: artifacts/INTENT.md
         min_bytes: 400
         must_contain: ["Acceptance Criteria"]
+        must_match: '(?m)(?:^- .*\n){3}'
   - id: "1.2"
     kind: SPEC
     role: spec
@@ -28,6 +29,7 @@ nodes:
       - path: artifacts/SPEC.md
         min_bytes: 600
         must_contain: ["Requirement", "Scenario"]
+        must_match: '(?im)^[#*\-\s0-9.)]*Requirement[\s\S]*^[#*\-\s0-9.)]*Scenario'
   - id: "2.1"
     kind: TEST
     role: impl

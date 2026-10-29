@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/store"
@@ -292,7 +293,11 @@ repos:
 		Workers: 1,
 		Out:     os.Stderr,
 		// Never spawns a real agent: the template writes the declared artifact.
-		ExecTemplate: `sh -c 'echo ok > out.txt'`,
+		// The template must write the artifact each node DECLARES (out.txt):
+		// the executor verifies the contract, so a template that writes
+		// something else correctly fails the node. The marker files are extra
+		// evidence that the node really ran inside its own repo.
+		ExecTemplate: `sh -c "echo ok > out.txt && echo ok > api-a.txt && echo ok > api-b.txt && echo ok > web-a.txt && echo ok > web-b.txt"`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -300,10 +305,92 @@ repos:
 	if sum.Failed != 0 || sum.Done != 2 {
 		t.Fatalf("summary = %+v, want 2 done and 0 failed", sum)
 	}
-	for _, dir := range []string{"api", "web"} {
-		if _, err := os.Stat(filepath.Join(root, dir, "out.txt")); err != nil {
-			t.Fatalf("%s did not produce its artifact: %v", dir, err)
+	for _, f := range []string{
+		filepath.Join(root, "api", "api-a.txt"),
+		filepath.Join(root, "api", "api-b.txt"),
+		filepath.Join(root, "web", "web-a.txt"),
+		filepath.Join(root, "web", "web-b.txt"),
+	} {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatalf("%s was not produced: %v", f, err)
 		}
+	}
+}
+
+// TestRunDoesNotHangOnFailedCrossRepoDependency is the regression test for the
+// hang: api's node fails (its artifact is never produced), so web's dependency
+// on it can NEVER become done. Before the fix, the gate reported only "not
+// ready", the web executor took that as "wait for the other repo", and Run
+// polled forever: the external state it waited on was never going to exist.
+//
+// The requirement is termination with a clear failure, not a green run.
+func TestRunDoesNotHangOnFailedCrossRepoDependency(t *testing.T) {
+	root := t.TempDir()
+	apiPlan := `
+version: 1
+run: api
+nodes:
+  - id: "1.9"
+    kind: IMPL
+    harness: exec
+    artifacts: [{path: out.txt, min_bytes: 1}]
+`
+	webPlan := `
+version: 1
+run: web
+nodes:
+  - id: "2.1"
+    kind: IMPL
+    harness: exec
+    deps: ["1.9"]
+    artifacts: [{path: out.txt, min_bytes: 1}]
+`
+	for dir, body := range map[string]string{"api": apiPlan, "web": webPlan} {
+		full := filepath.Join(root, dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(full, "plan.yaml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws := `version: 1
+name: failed-dep
+repos:
+  - path: api
+    plan: plan.yaml
+  - path: web
+    plan: plan.yaml
+`
+	path := filepath.Join(root, "dagrun.workspace.yaml")
+	if err := os.WriteFile(path, []byte(ws), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The template never writes out.txt, so both nodes fail verification.
+	done := make(chan RunSummary, 1)
+	go func() {
+		sum, _ := w.Run(context.Background(), RunOptions{
+			Workers:      1,
+			Out:          os.Stderr,
+			ExecTemplate: `sh -c "true"`,
+		})
+		done <- sum
+	}()
+	select {
+	case sum := <-done:
+		if sum.Failed == 0 {
+			t.Fatalf("summary = %+v, want at least one failed node", sum)
+		}
+		if sum.Pending != 0 || sum.Ran != 0 {
+			t.Fatalf("summary = %+v, want no node left pending or running", sum)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return: the failed cross-repo dependency was waited on forever")
 	}
 }
 
@@ -314,4 +401,33 @@ func has(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestRunAcrossReposIsNotFlaky pins the bug that made a cross-repo run
+// intermittently skip the second repo.
+//
+// The dependency lived in ANOTHER repo, so it was never in the web repo's own
+// state. The gate treated "not in the state yet" as "can never be done", so
+// the web executor gave up instead of waiting for the api executor to claim
+// and finish the node.
+//
+// It passed when the machine was quiet and failed when it was busy, because the
+// race was about which executor got there first.
+func TestRunAcrossReposIsNotFlaky(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		w := crossRepoFixture(t)
+		sum, err := w.Run(context.Background(), RunOptions{
+			Workers:      1,
+			Out:          os.Stderr,
+			ExecTemplate: `sh -c "echo ok > api-a.txt && echo ok > api-b.txt && echo ok > web-a.txt && echo ok > web-b.txt"`,
+		})
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		// The fixture has two nodes per repo: api/1.1, api/1.9, web/1.1,
+		// web/2.1. All four must finish.
+		if sum.Done != 4 || sum.Failed != 0 || sum.Pending != 0 {
+			t.Fatalf("run %d: summary = %+v, want 4 done, 0 failed, 0 pending", i, sum)
+		}
+	}
 }

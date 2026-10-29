@@ -20,6 +20,7 @@ nodes:
       - path: artifacts/INTENT.md
         min_bytes: 400
         must_contain: ["Acceptance Criteria"]
+        must_match: '(?m)(?:^- .*\n){3}'
   - id: "1.2"
     kind: PLAN
     role: spec

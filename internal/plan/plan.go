@@ -108,7 +108,9 @@ type Plan struct {
 	RoleCaps      map[string]int `yaml:"role_caps,omitempty" json:"role_caps,omitempty"`
 	MaxParallel   int            `yaml:"max_parallel,omitempty" json:"max_parallel,omitempty"`
 	MaxDynamic    int            `yaml:"max_dynamic,omitempty" json:"max_dynamic,omitempty"`
-	Nodes         []*Node        `yaml:"nodes" json:"nodes"`
+	// MaxCostUSD caps the run's spend. Zero means no limit.
+	MaxCostUSD float64 `yaml:"max_cost_usd,omitempty" json:"max_cost_usd,omitempty"`
+	Nodes      []*Node `yaml:"nodes" json:"nodes"`
 
 	// Root is the absolute directory artifact paths are resolved against. It is
 	// set on load and never serialized, so a checked-in plan stays portable.

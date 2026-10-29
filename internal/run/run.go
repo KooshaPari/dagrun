@@ -34,7 +34,43 @@ type Options struct {
 	ExecTemplate string
 	Tools        []string
 	Out          io.Writer
+
+	// Ready, when set, is an EXTRA readiness condition on top of the node's own
+	// dependencies. It is how a multi-repo run is scheduled: the workspace
+	// decides that a node may not start until a node in ANOTHER repo is done,
+	// and the per-repo executor asks.
+	//
+	// It returns (ready, waitable). ready means the node may start now.
+	// waitable means the gate could still open later, so a not-ready node must
+	// be waited on. A gate that reports waitable=false has proved the node can
+	// NEVER become ready (its external dependency is terminal and not done), so
+	// waiting would spin forever; the executor fails the node instead.
+	//
+	// A nil Ready means "the node's own dependencies are the whole story",
+	// which is the single-repo behaviour and the default.
+	Ready func(ctx context.Context, nodeID string) (ready bool, waitable bool)
+
+	// Acquire reserves a worker slot before a node is claimed, and Release
+	// returns it when the node finishes. Together they enforce a cap that
+	// spans several executors, which a per-executor cap cannot do.
+	//
+	// Acquire returns false when there is no capacity: the node is simply not
+	// started this tick.
+	Acquire func() bool
+	Release func()
+
+	// MaxCostUSD caps the run's spend. Zero means no limit. The executor
+	// stops claiming new nodes once the budget is spent, so an unattended run
+	// has a ceiling rather than a hope.
+	MaxCostUSD float64
+	// Rate prices the tokens a node reports. When it is the zero Rate, the
+	// default rate table is used.
+	Rate plan.Rate
 }
+
+// externalBlockedReason is recorded on a node whose cross-repo dependency is
+// terminal and not done. Waiting for such a dependency cannot make progress.
+const externalBlockedReason = "blocked: a dependency in another repo is terminal and not done"
 
 // Summary is the outcome of a run loop.
 type Summary struct {
@@ -56,6 +92,10 @@ type Executor struct {
 	wg       sync.WaitGroup
 	errMu    sync.Mutex
 	firstErr error
+
+	// budget tracks the run's spend so it can be enforced, not just reported.
+	budgetMu sync.Mutex
+	budget   plan.BudgetState
 }
 
 // New builds an executor.
@@ -69,7 +109,7 @@ func New(st *store.Store, tr *trace.Writer, opt Options) *Executor {
 	if opt.Out == nil {
 		opt.Out = os.Stderr
 	}
-	return &Executor{st: st, tr: tr, opt: opt}
+	return &Executor{st: st, tr: tr, opt: opt, budget: plan.NewBudget(opt.MaxCostUSD)}
 }
 
 // Loop schedules work until every node is terminal or nothing can progress.
@@ -94,7 +134,7 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 		// Expansion is idempotent per parent, so several executors can call it.
 		// Always re-snapshot afterwards: expansion mutates the run even when it
 		// materialises zero children (an expanded marker, a skipped template).
-		if _, xerr := e.expand(ctx, snap); xerr != nil {
+		if _, _, xerr := e.expand(ctx, snap); xerr != nil {
 			e.setErr(xerr)
 		} else if fresh, serr := e.st.Snapshot(); serr == nil {
 			snap = fresh
@@ -102,6 +142,11 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 		idx := indexAll(e.st, snap)
 
 		launched := 0
+		// capacityHeld records that a READY node could not start only because no
+		// worker slot was free (the cap spans executors). That is not a reason
+		// to conclude the run: the slot is released when the other in-flight
+		// node finishes, so the executor must keep ticking.
+		capacityHeld := false
 		for _, n := range e.st.All(snap) {
 			if atomic.LoadInt64(&e.active) >= int64(e.opt.Workers) {
 				break
@@ -115,6 +160,22 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 			}
 			if n.FanIn != "" && !store.Expanded(snap, n.FanIn) {
 				continue // the reduce cannot run before the map has expanded
+			}
+			// The external gate is consulted FIRST. A dependency that lives in
+			// another repo is not in this repo's store, so DepsDone would be
+			// false for a reason the local executor cannot resolve, and the
+			// node would be skipped forever without the gate ever being asked.
+			if e.opt.Ready != nil {
+				ready, waitable := e.opt.Ready(ctx, n.ID)
+				if !ready {
+					if !waitable {
+						// The gate is closed for good. Failing the node here is
+						// what stops the loop from waiting on a state that no
+						// executor will ever produce.
+						e.finishDirect(n, plan.StatusFailed, externalBlockedReason)
+					}
+					continue // an external gate (another repo) is not satisfied yet
+				}
 			}
 			if !e.st.DepsDone(snap, n.ID) {
 				continue
@@ -132,13 +193,28 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 				e.finishDirect(n, plan.StatusSkipped, "dry run")
 				continue
 			}
+			// The budget is a ceiling: once it is spent, no NEW node is
+			// claimed. Nodes already running finish and report, so the run
+			// ends with a truthful state rather than a truncated one.
+			if e.budgetSpent() {
+				continue
+			}
+			// Reserve a worker slot before claiming. The slot is held for the
+			// lifetime of the node, so the cap counts work in flight rather
+			// than work started.
+			if e.opt.Acquire != nil && !e.opt.Acquire() {
+				capacityHeld = true
+				continue // no capacity right now; try again next tick
+			}
 			claim, cerr := e.st.Claim(n.ID, e.opt.Owner, e.opt.Lease, time.Now())
 			if cerr != nil {
 				e.setErr(cerr)
+				e.releaseSlot()
 				continue
 			}
 			if !claim.Won {
-				continue // another process won the race, or a cap is full
+				e.releaseSlot() // another process won it
+				continue
 			}
 			atomic.AddInt64(&e.active, 1)
 			launched++
@@ -146,6 +222,7 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 			go func(node *plan.Node, epoch int64) {
 				defer e.wg.Done()
 				defer atomic.AddInt64(&e.active, -1)
+				defer e.releaseSlot()
 				e.execute(ctx, node, epoch, idx)
 			}(n, claim.Epoch)
 			_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID, Event: "node.claim", Epoch: claim.Epoch})
@@ -156,9 +233,53 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 
 		running := atomic.LoadInt64(&e.active)
 		if launched == 0 && running == 0 {
-			// nothing running here and nothing new to start: settle the rest
+			// This snapshot and the expansion above were taken BEFORE the last
+			// worker could write its terminal state (a worker may finish
+			// between the snapshot and this check). A discover node that went
+			// "done" in that window has never had its work set parsed, so
+			// breaking here would end the run with a malformed work set still
+			// reported as a green node. Re-expand against a fresh snapshot and
+			// only conclude once expansion has nothing left to do.
+			if changed, xerr := e.expandFresh(ctx); xerr != nil {
+				e.setErr(xerr)
+			} else if changed {
+				continue
+			}
+			// Nothing running here and nothing new to start. Settle the rest.
+			// A change means a node just became resolvable, and that can
+			// unblock another node (a fan_in reduce, a workspace dependent), so
+			// re-tick instead of concluding the run on the same snapshot.
 			if e.settle(ctx) {
-				break
+				continue
+			}
+			// Classify what the remaining nodes are waiting on. There are three
+			// distinct answers and conflating them is what made this loop both
+			// hang and drop work:
+			//
+			//   startable - the node is ready NOW but this tick passed it (the
+			//               gate opened after the launch scan). Ticking again
+			//               starts it.
+			//   waiting   - an outside executor may still make it ready. Wait.
+			//   permanent - an outside dependency is terminal and not done, so
+			//               it can never be ready. settle() fails it; exiting
+			//               here instead would drop the node silently.
+			startable, waiting, permanent := e.externalGate(snap)
+			if permanent {
+				if e.settle(ctx) {
+					continue
+				}
+				// The permanent nodes could not be written. Do not spin: they
+				// stay pending and the summary reports them.
+				if !startable && !waiting && !capacityHeld {
+					break
+				}
+			}
+			if startable || waiting || permanent || capacityHeld {
+				select {
+				case <-ctx.Done():
+				case <-time.After(100 * time.Millisecond):
+				}
+				continue
 			}
 			break
 		}
@@ -173,6 +294,69 @@ func (e *Executor) Loop(ctx context.Context) (Summary, error) {
 	_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Event: "run.end",
 		Message: fmt.Sprintf("done=%d failed=%d skipped=%d pending=%d", sum.Done, sum.Failed, sum.Skipped, sum.Pending)})
 	return sum, e.firstErr
+}
+
+// budgetSpent reports whether the run's cost ceiling has been crossed.
+func (e *Executor) budgetSpent() bool {
+	e.budgetMu.Lock()
+	defer e.budgetMu.Unlock()
+	return e.budget.Exceeded()
+}
+
+// BudgetSpent reports the run's spend against its ceiling.
+func (e *Executor) BudgetSpent() (spent, max float64) {
+	e.budgetMu.Lock()
+	defer e.budgetMu.Unlock()
+	return e.budget.Spent, e.budget.Max
+}
+
+// releaseSlot returns a reserved worker slot, if one was reserved.
+func (e *Executor) releaseSlot() {
+	if e.opt.Release != nil {
+		e.opt.Release()
+	}
+}
+
+// externalGate classifies the pending nodes that are ready apart from the
+// external gate.
+//
+// startable means such a node is ready right now: the executor still has work
+// to start, so it must tick again rather than exit.
+//
+// waiting means the gate could still open, so the executor must wait rather
+// than exit: the gate belongs to another executor, which is what will unblock
+// it.
+//
+// permanent means the gate can NEVER open, because an outside dependency is
+// terminal and not done. settle() must fail such a node; exiting here instead
+// is the silent-drop bug that left nodes pending with no failure reason.
+func (e *Executor) externalGate(snap *store.State) (startable, waiting, permanent bool) {
+	if e.opt.Ready == nil {
+		return false, false, false
+	}
+	for _, n := range e.st.All(snap) {
+		if n == nil || n.FanOut != "" {
+			continue
+		}
+		ns := snap.Nodes[n.ID]
+		if ns == nil || ns.Status != plan.StatusPending {
+			continue
+		}
+		if !e.st.DepsDone(snap, n.ID) {
+			continue // blocked by its own deps, not by the external gate
+		}
+		ready, waitable := e.opt.Ready(context.Background(), n.ID)
+		if ready {
+			startable = true
+			continue
+		}
+		if !waitable {
+			permanent = true
+			continue
+		}
+		waiting = true
+	}
+	return startable, waiting, permanent
 }
 
 // settle marks unreachable nodes so the run terminates with a clear reason
@@ -204,11 +388,31 @@ func (e *Executor) settle(ctx context.Context) bool {
 			changed = true
 			continue
 		}
+		if e.opt.Ready != nil {
+			ready, waitable := e.opt.Ready(ctx, n.ID)
+			if !ready {
+				if waitable {
+					// Waiting on another repo, not failed. Leave it pending.
+					continue
+				}
+				// The external gate can never open. Fail the node instead of
+				// waiting for a state no executor can produce.
+				e.finishDirect(n, plan.StatusFailed, externalBlockedReason)
+				changed = true
+				continue
+			}
+		}
 		if e.adopt(ctx, n) {
 			changed = true
 			continue
 		}
 		if !e.st.DepsDone(snap, n.ID) {
+			// The dependency may live in ANOTHER repo, in which case this
+			// executor cannot see it and must not declare the node blocked.
+			// The external gate is the authority there.
+			if _, waiting, _ := e.externalGate(snap); waiting {
+				continue // still waiting on the other repo
+			}
 			var missing []string
 			for _, d := range n.Deps {
 				if ds := snap.Nodes[d]; ds != nil && ds.Status != plan.StatusDone && ds.Status != plan.StatusSkipped {

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/run"
 	"github.com/KooshaPari/dagrun/internal/trace"
 )
@@ -27,6 +28,7 @@ func cmdRun(args []string) error {
 	tmpl := fs.String("exec-template", "", "fallback command template")
 	tools := fs.String("tools", "", "comma-separated tool allow-list")
 	verbose := fs.Bool("verbose", false, "log spawns and child output paths")
+	maxCost := fs.Float64("max-cost", 0, "cost ceiling in USD; 0 means the plan's own max_cost_usd, which may be 0 for no limit")
 	if err := fs.Parse(flags); err != nil {
 		return err
 	}
@@ -55,6 +57,7 @@ func cmdRun(args []string) error {
 		ExecTemplate: *tmpl,
 		Tools:        splitList(*tools),
 		Out:          os.Stderr,
+		MaxCostUSD:   maxCostUSD(p, *maxCost),
 	}
 	tr := trace.New(st.Dir() + "/trace")
 	ex := run.New(st, tr, opt)
@@ -103,4 +106,16 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// maxCostUSD picks the cost ceiling: the flag wins, then the plan's own
+// declaration, then no limit.
+func maxCostUSD(p *plan.Plan, flagValue float64) float64 {
+	if flagValue > 0 {
+		return flagValue
+	}
+	if p != nil {
+		return p.MaxCostUSD
+	}
+	return 0
 }

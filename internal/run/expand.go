@@ -16,7 +16,12 @@ import (
 // parent, so a second call is a no-op. A malformed work set fails the parent
 // rather than silently expanding nothing, because "the plan said do N things
 // and we did zero" is exactly the silent failure this tool exists to prevent.
-func (e *Executor) expand(ctx context.Context, snap *store.State) (int, error) {
+//
+// The bool reports whether anything was written (children materialised, or a
+// parent failed because its work set would not parse). The scheduler uses it to
+// decide whether another tick is still needed: expansion is a STATE TRANSITION,
+// not a read, so a caller must not conclude the run from a stale snapshot.
+func (e *Executor) expand(ctx context.Context, snap *store.State) (int, bool, error) {
 	fanInOf := map[string]string{}
 	for _, n := range e.st.Plan().Nodes {
 		if n != nil && n.FanIn != "" {
@@ -25,6 +30,7 @@ func (e *Executor) expand(ctx context.Context, snap *store.State) (int, error) {
 	}
 
 	added := 0
+	changed := false
 	for _, n := range e.st.Plan().Sorted() {
 		if n == nil || n.Discover == nil {
 			continue
@@ -40,8 +46,9 @@ func (e *Executor) expand(ctx context.Context, snap *store.State) (int, error) {
 		units, err := plan.LoadUnits(e.st.Root(), *n.Discover)
 		if err != nil {
 			if ferr := e.st.Force(n.ID, plan.StatusFailed, "discover: "+err.Error(), ns.Verify, time.Now()); ferr != nil {
-				return added, ferr
+				return added, changed, ferr
 			}
+			changed = true
 			_ = e.tr.Emit(e.opt.Owner, trace.Event{Run: e.st.Plan().Run, Worker: e.opt.Owner, Node: n.ID,
 				Event: "node.failed", Message: "discover: " + err.Error()})
 			fmt.Fprintf(e.opt.Out, "discover %s failed: %v\n", n.ID, err)
@@ -56,9 +63,10 @@ func (e *Executor) expand(ctx context.Context, snap *store.State) (int, error) {
 
 		k, merr := e.st.Materialize(n.ID, children, fanInOf[n.ID])
 		if merr != nil {
-			return added, merr
+			return added, changed, merr
 		}
 		added += k
+		changed = true
 		// The template itself is not a unit of work; record that it was
 		// expanded so status and the run summary do not report it as pending.
 		if template != nil {
@@ -73,7 +81,22 @@ func (e *Executor) expand(ctx context.Context, snap *store.State) (int, error) {
 			Event: "node.expand", Message: msg})
 		fmt.Fprintf(e.opt.Out, "expanded %s -> %s\n", n.ID, msg)
 	}
-	return added, nil
+	return added, changed, nil
+}
+
+// expandFresh runs one expansion pass against a freshly read snapshot.
+//
+// The scheduler needs this at the point where it would otherwise stop: the
+// snapshot it expanded from was read before the last worker could write its
+// terminal state, so a discover node that finished "done" in that window (and
+// whose work set is therefore still unparsed) is invisible to that pass.
+func (e *Executor) expandFresh(ctx context.Context) (bool, error) {
+	snap, err := e.st.Snapshot()
+	if err != nil {
+		return false, err
+	}
+	_, changed, err := e.expand(ctx, snap)
+	return changed, err
 }
 
 // templateFor returns the node declared as fan_out from parentID.

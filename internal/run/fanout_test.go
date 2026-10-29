@@ -205,7 +205,7 @@ func TestMaxDynamicCapsExpansion(t *testing.T) {
 // The work set is an INPUT to the expansion, not evidence that it happened.
 func TestMalformedWorkSetIsNeverAdoptedAsDone(t *testing.T) {
 	yaml := strings.Replace(fanOutPlan, "format: lines", "format: json", 1)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		h := fanOutRig(t, yaml)
 		h.loop(t, fanOutTemplate, 2)
 		snap, _ := h.st.Snapshot()
@@ -213,5 +213,52 @@ func TestMalformedWorkSetIsNeverAdoptedAsDone(t *testing.T) {
 		if ns == nil || ns.Status != plan.StatusFailed {
 			t.Fatalf("run %d: discover parent = %v, want failed", i, ns)
 		}
+	}
+}
+
+// TestDiscoverFinishingAsLoopStopsIsStillParsed pins the SECOND half of the
+// same bug, which is the actual race under load.
+//
+// The loop reads its snapshot, expands, and only then checks whether any work
+// is in flight. A worker can write "done" between those two points: the node
+// ran (so adoption is no longer in play) but the snapshot the expansion saw
+// still said "running", so the malformed work set was never parsed and the run
+// ended green. This reproduces the stale-snapshot window deterministically:
+// force the discover node done behind the executor's back, then ask the
+// executor whether the run may conclude.
+func TestDiscoverFinishingAsLoopStopsIsStillParsed(t *testing.T) {
+	yaml := strings.Replace(fanOutPlan, "format: lines", "format: json", 1)
+	h := fanOutRig(t, yaml)
+	var out bytes.Buffer
+	ex := New(h.st, h.tr, Options{
+		Workers: 1, Owner: "test", Lease: time.Minute, ExecTemplate: fanOutTemplate, Out: &out,
+	})
+
+	// The node verified its artifact and finished, exactly as a worker would.
+	if err := h.st.Force("4.1", plan.StatusDone, "", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ex.expandFresh(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expansion reported no change; a done, unparsed work set must be a state transition")
+	}
+	snap, _ := h.st.Snapshot()
+	if ns := snap.Nodes["4.1"]; ns == nil || ns.Status != plan.StatusFailed {
+		t.Fatalf("discover parent = %v, want failed", ns)
+	}
+	if store.Expanded(snap, "4.1") {
+		t.Error("unparseable work set must not be marked expanded")
+	}
+	// The transition is idempotent: a second pass has nothing left to do, so
+	// the scheduler can still terminate.
+	again, err := ex.expandFresh(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again {
+		t.Error("second expansion pass changed state; the run would never stop")
 	}
 }
