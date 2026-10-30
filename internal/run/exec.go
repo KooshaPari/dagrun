@@ -386,10 +386,7 @@ func (e *Executor) retryOrFail(n *plan.Node, class FailureClass) string {
 		// enforces the attempt budget, so a pending node cannot loop forever.
 		return plan.StatusPending
 	}
-	max := n.MaxAttempts
-	if max < 1 {
-		max = 1
-	}
+	max := effectiveAttempts(n.MaxAttempts, class)
 	if !ShouldRetry(class, attempts, max) {
 		return plan.StatusFailed
 	}
