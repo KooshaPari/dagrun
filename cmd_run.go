@@ -62,12 +62,16 @@ func cmdRun(args []string) error {
 	// Per-provider admission control. The policy comes from the plan, so a
 	// run's provider limits travel with the plan rather than living in a
 	// shell history or an environment variable nobody can find.
-	if len(p.ProviderPolicy.Limits) > 0 {
-		adm := plan.NewAdmission()
-		adm.ApplyPolicy(p.ProviderPolicy)
-		opt.Admission = adm
-		opt.ProviderPolicy = p.ProviderPolicy
-	}
+	//
+	// It is created even when the plan declares no policy, because a provider
+	// THROTTLE gets a default backoff regardless: without it, a 429 is retried
+	// immediately into the same wall and a transient throttle fails the run.
+	// An empty policy still means "no cap, no cooldown" for every other
+	// failure class.
+	adm := plan.NewAdmission()
+	adm.ApplyPolicy(p.ProviderPolicy)
+	opt.Admission = adm
+	opt.ProviderPolicy = p.ProviderPolicy
 	tr := trace.New(st.Dir() + "/trace")
 	ex := run.New(st, tr, opt)
 	summary, runErr := ex.Loop(ctx)

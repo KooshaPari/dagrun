@@ -301,7 +301,14 @@ func (e *Executor) settleNode(ctx context.Context, v verdict) {
 
 	class := FailureNone
 	if !rep.OK {
-		class = Classify(&rep, checkErr(rep), fail.spawnErr, fail.timedOut, v.exitCode)
+		class = Classify(Evidence{
+			Report:   &rep,
+			CheckErr: checkErr(rep),
+			SpawnErr: fail.spawnErr,
+			TimedOut: fail.timedOut,
+			ExitCode: v.exitCode,
+			Output:   v.captured,
+		})
 		if _, err := e.st.SetFailureClass(n.ID, e.opt.Owner, epoch, string(class)); err != nil {
 			e.setErr(err)
 		}
@@ -313,7 +320,7 @@ func (e *Executor) settleNode(ctx context.Context, v verdict) {
 		// provider for something one agent got wrong.
 		if e.opt.Admission != nil {
 			provider := plan.ProviderOf(n)
-			limits := e.opt.ProviderPolicy.LimitsFor(provider)
+			limits := effectiveLimits(e.opt.ProviderPolicy.LimitsFor(provider), class)
 			if isProviderFailureClass(class) {
 				e.opt.Admission.Fail(provider, limits, time.Now())
 				_ = e.tr.Emit(e.opt.Owner, trace.Event{

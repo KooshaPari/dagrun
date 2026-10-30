@@ -142,14 +142,13 @@ func (s *Server) toolRun(ctx context.Context, dir, owner, template string, maxNo
 		MaxCostUSD:     h.plan.MaxCostUSD,
 		ProviderPolicy: h.plan.ProviderPolicy,
 	}
-	// The plan's provider policy must become live admission state. Without
-	// this the limits are parsed and then ignored, which is worse than absent:
-	// the plan would claim a cap it never enforces.
-	if len(h.plan.ProviderPolicy.Limits) > 0 {
-		adm := plan.NewAdmission()
-		adm.ApplyPolicy(h.plan.ProviderPolicy)
-		opt.Admission = adm
-	}
+	// The plan's provider policy must become live admission state. It is
+	// created even with no declared limits, because a provider THROTTLE gets a
+	// default backoff regardless: otherwise a 429 is retried immediately into
+	// the same wall and a transient throttle fails the run.
+	adm := plan.NewAdmission()
+	adm.ApplyPolicy(h.plan.ProviderPolicy)
+	opt.Admission = adm
 
 	ex := run.New(h.st, trace.New(filepath.Join(h.st.Dir(), "trace")), opt)
 	sum, err := ex.Loop(runCtx)

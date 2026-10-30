@@ -138,15 +138,21 @@ func ProviderOf(n *Node) string {
 //     node on that provider. Never pass these to Fail.
 const (
 	ClassHarnessError = "harness_error"
+	ClassRateLimited  = "rate_limited"
 	ClassTimeout      = "timeout"
 	ClassContractMiss = "contract_miss"
 )
 
-// IsProviderFailure reports whether a failure class is the provider's fault and
-// therefore grounds for a cooldown. See the class constants above.
+// IsProviderFailure reports whether a failure class is the provider's fault.
+//
+// This mirrors run.isProviderFailureClass. The two copies exist because the
+// dependency runs one way only (run imports plan), so neither side can call the
+// other. They must be changed together; a test in the run package asserts the
+// set, and ClassRateLimited below is the reason the mirror is worth the risk:
+// a throttle is unambiguously the provider's doing.
 func IsProviderFailure(class string) bool {
 	switch class {
-	case ClassHarnessError, ClassTimeout:
+	case ClassHarnessError, ClassRateLimited, ClassTimeout:
 		return true
 	default:
 		return false
