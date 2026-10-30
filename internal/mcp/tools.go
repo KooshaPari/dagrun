@@ -92,6 +92,39 @@ func toolList() []tool {
 			Description: "Diagnose one node: which predicate failed, why, and what to do next.",
 			InputSchema: obj(map[string]any{"dir": dir, "node": node}, "node"),
 		},
+		{
+			Name: "dagrun_trace",
+			Description: "The merged execution trace: every event from every worker, in time order. " +
+				"This is what happened, as opposed to what the state file says.",
+			InputSchema: obj(map[string]any{"dir": dir, "limit": num("return only the last N events")}),
+		},
+		{
+			Name: "dagrun_submit",
+			Description: "Post the run to a Tracera instance at /ingest/agileplus. " +
+				"Fails loud: a non-2xx status is an error, and so is a 2xx whose report carries " +
+				"a non-empty error list. Use dry_run to get the exact payload without sending it.",
+			InputSchema: obj(map[string]any{
+				"dir":     dir,
+				"url":     str("Tracera base URL, e.g. http://localhost:3180"),
+				"token":   str("NAME of the env var holding the bearer token; never the token itself"),
+				"format":  str("tracera (default) or agileplus"),
+				"dry_run": boolean("return the payload without sending it"),
+			}),
+		},
+		{
+			Name: "dagrun_run",
+			Description: "Execute ready nodes by spawning their harnesses, then return the summary. " +
+				"BOUNDED: stops after max_nodes (default 1) so one call cannot hang a client. " +
+				"An agent that wants to drive the whole run should loop next -> claim -> done " +
+				"instead, so it owns each node rather than handing the run to the executor.",
+			InputSchema: obj(map[string]any{
+				"dir":       dir,
+				"max_nodes": num("how many nodes to attempt before returning (default 1)"),
+				"owner":     str("owner identity recorded on each claim"),
+				"template":  str("shell command to run for nodes that name no harness"),
+				"dry_run":   boolean("decide what would run without spawning anything"),
+			}),
+		},
 	}
 }
 
@@ -169,6 +202,16 @@ func (s *Server) callTool(ctx context.Context, name string, raw json.RawMessage)
 		TTLSeconds int    `json:"ttl_seconds"`
 		Force      bool   `json:"force"`
 		Reset      bool   `json:"reset"`
+		// trace
+		Limit int `json:"limit"`
+		// submit
+		URL    string `json:"url"`
+		Token  string `json:"token"`
+		Format string `json:"format"`
+		// run
+		MaxNodes int    `json:"max_nodes"`
+		Template string `json:"template"`
+		DryRun   bool   `json:"dry_run"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &in); err != nil {
@@ -192,6 +235,12 @@ func (s *Server) callTool(ctx context.Context, name string, raw json.RawMessage)
 		return s.toolValidate(ctx, in.Dir)
 	case "dagrun_explain":
 		return s.toolExplain(ctx, in.Dir, in.Node)
+	case "dagrun_trace":
+		return s.toolTrace(in.Dir, in.Limit)
+	case "dagrun_submit":
+		return s.toolSubmit(in.Dir, in.URL, in.Token, in.Format, in.DryRun)
+	case "dagrun_run":
+		return s.toolRun(ctx, in.Dir, in.Owner, in.Template, in.MaxNodes, in.DryRun)
 	}
 	return nil, true, fmt.Errorf("unknown tool %q", name)
 }

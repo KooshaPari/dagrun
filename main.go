@@ -84,6 +84,8 @@ func main() {
 		err = cmdReview(args)
 	case "template":
 		err = cmdTemplate(args)
+	case "skill":
+		err = cmdSkill(args)
 	case "version", "--version", "-v":
 		fmt.Printf("dagrun %s\n", Version)
 		return
@@ -119,6 +121,7 @@ USAGE
   dagrun trace [flags]           merged execution trace
   dagrun export [flags]          emit agileplus | tracera | json
   dagrun submit [flags]          post the run to a Tracera instance
+  dagrun skill                   print the agent skill (frontmatter + verbs)
   dagrun detect [flags]          show detected agent harnesses
   dagrun viz [flags]             render the run as an interactive HTML file
   dagrun draft [flags]           turn an intent paragraph into a valid plan

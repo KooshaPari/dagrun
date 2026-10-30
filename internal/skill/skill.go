@@ -20,9 +20,15 @@ type Command struct {
 	Example string // one runnable invocation
 }
 
-// commands is the canonical list: the eight verbs that carry the loop. The
-// remaining verbs (trace, export, viz, lint, doctor, ...) are inspection
-// helpers; an agent does not need them to make progress.
+// commands is the canonical list: the verbs that carry the loop, plus the ones
+// an agent needs to close it out. The loop is plan -> next -> claim -> done;
+// trace says what happened, submit hands the run to Tracera, and skill is how
+// an agent loads this table without running --help.
+//
+// The remaining verbs (export, viz, lint, critique, review, doctor, gc,
+// workspace, timeline, stats, draft, template, detect) are inspection and
+// authoring helpers. They are documented by --help and deliberately left out
+// here: a skill that lists everything teaches nothing about where to start.
 var commands = []Command{
 	{
 		Name:    "plan",
@@ -71,6 +77,24 @@ var commands = []Command{
 		Args:    "",
 		Purpose: "re-check every node against the filesystem",
 		Example: "dagrun validate",
+	},
+	{
+		Name:    "trace",
+		Args:    "",
+		Purpose: "the merged execution trace: what happened, as opposed to what the state file says",
+		Example: "dagrun trace --json",
+	},
+	{
+		Name:    "submit",
+		Args:    "",
+		Purpose: "post the run to a Tracera instance; fails loud on any reported error",
+		Example: "dagrun submit --url http://localhost:3180 --token TRACERA_TOKEN",
+	},
+	{
+		Name:    "skill",
+		Args:    "",
+		Purpose: "print this skill, so an agent can load it without running --help",
+		Example: "dagrun skill",
 	},
 }
 
