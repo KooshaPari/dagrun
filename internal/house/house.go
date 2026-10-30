@@ -156,11 +156,9 @@ func Doctor(dir string, st *store.Store, snap *store.State) *Report {
 	// st can be nil when the caller only wants a directory health check, so the
 	// preflight is skipped rather than dereferenced.
 	if st != nil {
-		installed := map[string]bool{}
-		for _, info := range harness.Detect() {
-			installed[info.Name] = true
+		for _, f := range HarnessFindings(st.Plan().Nodes) {
+			rep.Findings = append(rep.Findings, f)
 		}
-		checkHarnesses(st.Plan().Nodes, installed, add)
 	}
 	return rep
 }
@@ -176,6 +174,23 @@ func Doctor(dir string, st *store.Store, snap *store.State) *Report {
 // Only an EXPLICIT harness is checked. "auto" means "pick an installed one", so
 // it is viable by definition; "exec" is a command template with no binary to
 // look for; and a check-only node has no child at all.
+// HarnessFindings reports nodes whose harness cannot run.
+//
+// It is exported so `dagrun run` can refuse a plan it cannot execute BEFORE it
+// burns an attempt budget per node. An unattended run has nobody watching to
+// notice the pattern, so the refusal is the only useful moment to speak.
+func HarnessFindings(nodes []*plan.Node) []Finding {
+	var out []Finding
+	installed := map[string]bool{}
+	for _, info := range harness.Detect() {
+		installed[info.Name] = true
+	}
+	checkHarnesses(nodes, installed, func(code, sev, detail, action string) {
+		out = append(out, Finding{Code: code, Severity: sev, Detail: detail, Action: action})
+	})
+	return out
+}
+
 // installed is injected rather than probed so the rule is testable on a host
 // where every known harness happens to be present. A check that can only be
 // exercised by uninstalling something is not a check.

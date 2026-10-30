@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/KooshaPari/dagrun/internal/house"
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/run"
 	"github.com/KooshaPari/dagrun/internal/trace"
@@ -29,6 +30,7 @@ func cmdRun(args []string) error {
 	tools := fs.String("tools", "", "comma-separated tool allow-list")
 	verbose := fs.Bool("verbose", false, "log spawns and child output paths")
 	maxCost := fs.Float64("max-cost", 0, "cost ceiling in USD; 0 means the plan's own max_cost_usd, which may be 0 for no limit")
+	forceRun := fs.Bool("force", false, "start even when a node names a harness that cannot run")
 	if err := fs.Parse(flags); err != nil {
 		return err
 	}
@@ -36,6 +38,22 @@ func cmdRun(args []string) error {
 	p, st, _, err := openRun(dir)
 	if err != nil {
 		return err
+	}
+	// Refuse a plan that cannot possibly run, BEFORE spending an attempt budget
+	// per node discovering it. An unattended run has nobody watching to notice
+	// the pattern, so this is the only moment where saying so helps. --force
+	// exists because a harness may be installed mid-run by someone else.
+	if !*forceRun && !*dry {
+		var blockers []string
+		for _, f := range house.HarnessFindings(p.Nodes) {
+			if f.Actionable() {
+				blockers = append(blockers, f.Detail+" ("+f.Action+")")
+			}
+		}
+		if len(blockers) > 0 {
+			return fmt.Errorf("cannot start: %s\n  fix the plan, install the harness, or pass --force",
+				strings.Join(blockers, "\n  "))
+		}
 	}
 	if *workers <= 0 {
 		*workers = p.MaxParallel
