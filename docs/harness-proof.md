@@ -150,3 +150,22 @@ so this is a version/config difference, not a family limitation.
 `dagrun detect` reports install state and versions; it cannot report
 credentials or configured defaults, which is why the two blocked harnesses look
 installed and healthy.
+
+## Current provider state (measured 2026-10-30 09:2xZ)
+
+The real-model lanes are **blocked right now**, and none of it is a dagrun
+defect. Recorded so a later reader does not mistake an outage for a bug.
+
+| route | state | evidence |
+|---|---|---|
+| opencode-go / `deepseek-v4.1-flash` | **THROTTLED** | a live 2-node run got `429` with `{"type":"GoUsageLimitError","message":"Go usage limit exceeded"}`, `limitName: "monthly"`. The same credential served a single completion minutes later, so it is a burst throttle wearing a monthly label. A `POST` at 09:21Z returned a non-JSON body after 47s (timeout). |
+| openai-compatible / `MiniMax-M3.1-Flash` | **PRIMARY OK, DISPATCH BROKEN** | `GET api.minimax.io/v1/models` -> 200 (9 models), direct completion -> serves. But `jcode provider-doctor openai-compatible` reports `12148 live model(s)` and selects `auto/best-coding`, i.e. the profile resolves to an aggregator proxy, not MiniMax's own API. `swarm spawn` then fails twice: once against `http://100.96.135.160:20128/v1/chat/completions` (reachable, 401) and once with `[openrouter/minimax/minimax-m3.1-flash] [402]: Insufficient credits`. `openrouter` appears nowhere in `~/.jcode/config.toml`, so that hop is an internal failover leg and `cross_provider_failover = "countdown"` walks it. |
+| codex / `gpt-6.1-terra` | **BROKEN** | `codex exec` dies with `rmcp::transport::worker: worker quit with fatal: Transport channel closed ... error sending request`. Two-node E2E could not start. |
+| forge / `helioslite` | not attempted | needs a PTY plus an interactive provider picker (see above). |
+| `harness: exec` | **WORKS** | all structural E2E evidence in this repo uses it. |
+
+Consequence: dagrun's structural machinery is proven (admission control,
+budgets, MCP, submit, doctor, retries) but a fresh **real-model** two-node
+chain is NOT proven on 2026-10-30. The last successful real-harness runs are
+the jcode/codex/forge probes recorded above. Do not claim a real-model E2E
+proof until one completes again.
