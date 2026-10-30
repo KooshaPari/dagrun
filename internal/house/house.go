@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KooshaPari/dagrun/internal/harness"
 	"github.com/KooshaPari/dagrun/internal/plan"
 	"github.com/KooshaPari/dagrun/internal/store"
 )
@@ -151,7 +152,57 @@ func Doctor(dir string, st *store.Store, snap *store.State) *Report {
 				fmt.Sprintf("only %d MiB free on the run filesystem", free>>20), "free space or move the run directory")
 		}
 	}
+
+	// st can be nil when the caller only wants a directory health check, so the
+	// preflight is skipped rather than dereferenced.
+	if st != nil {
+		installed := map[string]bool{}
+		for _, info := range harness.Detect() {
+			installed[info.Name] = true
+		}
+		checkHarnesses(st.Plan().Nodes, installed, add)
+	}
 	return rep
+}
+
+// checkHarnesses reports nodes whose harness cannot actually run.
+//
+// This is a PREFLIGHT check, and it exists because of a measured cost: a run
+// assigned to an uninstalled harness otherwise discovers the problem one spawn
+// at a time, burning the whole attempt budget per node before anyone notices.
+// A run that cannot possibly succeed should say so before it starts, not after
+// an hour.
+//
+// Only an EXPLICIT harness is checked. "auto" means "pick an installed one", so
+// it is viable by definition; "exec" is a command template with no binary to
+// look for; and a check-only node has no child at all.
+// installed is injected rather than probed so the rule is testable on a host
+// where every known harness happens to be present. A check that can only be
+// exercised by uninstalling something is not a check.
+func checkHarnesses(nodes []*plan.Node, installed map[string]bool, add func(code, sev, detail, action string)) {
+	seen := map[string]bool{}
+	for _, n := range nodes {
+		if n == nil || n.Harness == "" || n.Harness == "auto" || n.Harness == "exec" {
+			continue
+		}
+		// A node with no artifacts and a check has nothing to spawn.
+		if n.Check != "" && len(n.Artifacts) == 0 {
+			continue
+		}
+		if installed[n.Harness] || seen[n.Harness] {
+			continue
+		}
+		seen[n.Harness] = true
+		if _, err := harness.Resolve(n.Harness); err != nil {
+			add("harness_unknown", SeverityError,
+				fmt.Sprintf("node %s names harness %q, which dagrun does not know", n.ID, n.Harness),
+				"fix the plan's harness, or run `dagrun detect` to see the supported set")
+			continue
+		}
+		add("harness_missing", SeverityError,
+			fmt.Sprintf("node %s names harness %q, which is not installed", n.ID, n.Harness),
+			fmt.Sprintf("install %s, or set the node's harness to exec with a command template", n.Harness))
+	}
 }
 
 // branchOf reads the branch a worktree is on.

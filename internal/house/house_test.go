@@ -244,3 +244,216 @@ func listing(t *testing.T, root string) []string {
 	})
 	return out
 }
+
+// rigWithHarness builds a run whose single node names an explicit harness.
+func rigWithHarness(t *testing.T, name string) (string, *store.Store, *store.State) {
+	t.Helper()
+	root := t.TempDir()
+	body := `
+version: 1
+run: harnessed
+nodes:
+  - id: "1"
+    kind: DOC
+    harness: ` + name + `
+    artifacts: [{path: a.md}]
+`
+	p, err := plan.Parse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Root = root
+	dir := filepath.Join(root, ".dagrun")
+	st, err := store.Open(dir, p, []byte(body), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := st.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, st, snap
+}
+
+func findingCodes(rep *Report) []string {
+	out := make([]string, 0, len(rep.Findings))
+	for _, f := range rep.Findings {
+		out = append(out, f.Code)
+	}
+	return out
+}
+
+// An unknown harness can never run, so doctor must say so before the run starts
+// rather than burning an attempt budget per node discovering it.
+func TestDoctorFlagsAnUnknownHarness(t *testing.T) {
+	dir, st, snap := rigWithHarness(t, "definitely-not-a-harness")
+	rep := Doctor(dir, st, snap)
+	if rep.Healthy() {
+		t.Fatalf("an unknown harness should be actionable: %v", findingCodes(rep))
+	}
+	found := false
+	for _, f := range rep.Findings {
+		if f.Code == "harness_unknown" {
+			found = true
+			if f.Action == "" {
+				t.Error("harness_unknown has no action; the finding must say what to do")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("harness_unknown not reported: %v", findingCodes(rep))
+	}
+}
+
+// A known harness that is not installed is the case that actually costs a run an
+// hour, so it is an error, not a warning.
+//
+// The installed set is INJECTED, so this exercises the rule on any host. The
+// earlier version skipped whenever the harness happened to be present, which
+// meant it validated nothing on this machine.
+func TestDoctorFlagsAMissingHarness(t *testing.T) {
+	nodes, err := plan.Parse([]byte(`
+version: 1
+run: harnessed
+nodes:
+  - id: "1"
+    kind: DOC
+    harness: kcode
+    artifacts: [{path: a.md}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var findings []Finding
+	add := func(code, sev, detail, action string) {
+		findings = append(findings, Finding{Code: code, Severity: sev, Detail: detail, Action: action})
+	}
+	// Nothing is installed.
+	checkHarnesses(nodes.Nodes, map[string]bool{}, add)
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want exactly one harness_missing", findings)
+	}
+	f := findings[0]
+	if f.Code != "harness_missing" {
+		t.Fatalf("code = %q, want harness_missing", f.Code)
+	}
+	if f.Severity != SeverityError {
+		t.Fatalf("severity = %q, want %q", f.Severity, SeverityError)
+	}
+	if !strings.Contains(f.Action, "exec") {
+		t.Errorf("action %q should mention the exec fallback", f.Action)
+	}
+}
+
+func TestCheckHarnessesPassesWhenInstalled(t *testing.T) {
+	nodes, err := plan.Parse([]byte(`
+version: 1
+run: harnessed
+nodes:
+  - id: "1"
+    kind: DOC
+    harness: kcode
+    artifacts: [{path: a.md}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var findings []Finding
+	add := func(code, sev, detail, action string) {
+		findings = append(findings, Finding{Code: code})
+	}
+	checkHarnesses(nodes.Nodes, map[string]bool{"kcode": true}, add)
+	if len(findings) != 0 {
+		t.Fatalf("an installed harness was flagged: %+v", findings)
+	}
+}
+
+// One finding per harness, not per node: a plan with six nodes on the same
+// missing harness should not produce six identical complaints.
+func TestCheckHarnessesReportsEachHarnessOnce(t *testing.T) {
+	nodes, err := plan.Parse([]byte(`
+version: 1
+run: many
+nodes:
+  - id: "1"
+    kind: DOC
+    harness: kcode
+    artifacts: [{path: a.md}]
+  - id: "2"
+    kind: DOC
+    harness: kcode
+    artifacts: [{path: b.md}]
+  - id: "3"
+    kind: DOC
+    harness: kcode
+    artifacts: [{path: c.md}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var findings []Finding
+	add := func(code, sev, detail, action string) {
+		findings = append(findings, Finding{Code: code})
+	}
+	checkHarnesses(nodes.Nodes, map[string]bool{}, add)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1 (report each harness once): %+v", len(findings), findings)
+	}
+}
+
+// "auto" and "exec" are viable by definition and must never be flagged.
+func TestDoctorAcceptsAutoAndExecHarnesses(t *testing.T) {
+	for _, name := range []string{"auto", "exec"} {
+		dir, st, snap := rigWithHarness(t, name)
+		rep := Doctor(dir, st, snap)
+		for _, f := range rep.Findings {
+			if strings.HasPrefix(f.Code, "harness_") {
+				t.Errorf("harness %q was flagged with %q", name, f.Code)
+			}
+		}
+	}
+}
+
+// A check-only node spawns nothing, so its harness is irrelevant.
+func TestDoctorIgnoresHarnessOnACheckOnlyNode(t *testing.T) {
+	root := t.TempDir()
+	body := `
+version: 1
+run: checkonly
+nodes:
+  - id: "1"
+    kind: GATE
+    harness: definitely-not-a-harness
+    check: "true"
+`
+	p, err := plan.Parse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Root = root
+	dir := filepath.Join(root, ".dagrun")
+	st, err := store.Open(dir, p, []byte(body), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := st.Snapshot()
+	rep := Doctor(dir, st, snap)
+	for _, f := range rep.Findings {
+		if strings.HasPrefix(f.Code, "harness_") {
+			t.Errorf("a check-only node was flagged with %q", f.Code)
+		}
+	}
+}
+
+// Doctor must survive a nil store: callers use it for a bare directory check.
+func TestDoctorWithNilStoreDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	rep := Doctor(dir, nil, nil)
+	if rep == nil {
+		t.Fatal("nil report")
+	}
+}
