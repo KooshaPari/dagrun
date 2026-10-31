@@ -22,7 +22,7 @@ import (
 // allCommands is the dispatch switch, minus the ones that are not commands.
 var allCommands = []string{
 	"plan", "run", "next", "claim", "done", "fail", "skip", "status",
-	"validate", "trace", "export", "submit", "detect", "mcp", "explain",
+	"validate", "trace", "export", "submit", "import", "detect", "mcp", "explain",
 	"viz", "draft", "doctor", "gc", "workspace", "timeline", "stats",
 	"critique", "lint", "review", "template", "skill",
 }
