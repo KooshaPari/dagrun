@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -98,6 +99,14 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
+		// Asking for help is not a failure. The flag package prints the usage
+		// text and returns ErrHelp; without this, every `dagrun <cmd> --help`
+		// exited 1 and an agent probing for usage saw a false error. That was
+		// 24 of the 26 commands, because only the few that handle --help
+		// themselves got it right.
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "dagrun %s: %v\n", cmd, err)
 		os.Exit(1)
 	}
