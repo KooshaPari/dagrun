@@ -246,34 +246,3 @@ func effectiveLimits(l plan.ProviderLimits, class FailureClass) plan.ProviderLim
 	}
 	return l
 }
-
-// MinRateLimitAttempts is the attempt floor for a throttled node, regardless of
-// the plan's own budget.
-//
-// The default budget is 2 attempts, about a minute of patience at the 30s
-// default backoff. A measured run burned both attempts inside one provider
-// throttle window and failed a node that would have succeeded a few minutes
-// later. A throttle is not the node's fault and is temporary by definition, so
-// it earns more patience than an agent's own mistake.
-//
-// It is a floor, not a ceiling: a plan that asks for more still gets more. And
-// it is bounded, so a permanently exhausted quota gives up rather than spinning
-// forever.
-const MinRateLimitAttempts = 6
-
-// effectiveAttempts returns the attempt budget to apply for a failure class,
-// starting from the plan's own max_attempts.
-//
-// Only rate_limited is raised, and only up to the floor: it is a minimum, never
-// a maximum, so a plan that already asks for more keeps its number. Every other
-// class is passed through untouched, which is what keeps "the plan said 2"
-// meaning 2 for an agent's own mistakes.
-func effectiveAttempts(planMax int, class FailureClass) int {
-	if planMax < 1 {
-		planMax = 1
-	}
-	if class == FailureRateLimited && planMax < MinRateLimitAttempts {
-		return MinRateLimitAttempts
-	}
-	return planMax
-}

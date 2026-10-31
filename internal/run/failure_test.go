@@ -206,22 +206,3 @@ func TestEffectiveLimitsGivesThrottlesADefaultBackoff(t *testing.T) {
 		t.Fatalf("the plan's explicit limits were overridden: %+v", got)
 	}
 }
-
-func TestRateLimitedGetsAHighAttemptFloor(t *testing.T) {
-	if MinRateLimitAttempts <= 2 {
-		t.Fatalf("MinRateLimitAttempts = %d, must exceed the default budget of 2 or it changes nothing", MinRateLimitAttempts)
-	}
-	// The floor is a MINIMUM: a plan asking for more keeps its own number.
-	if got := effectiveAttempts(3, FailureRateLimited); got != MinRateLimitAttempts {
-		t.Fatalf("attempts = %d, want the floor %d", got, MinRateLimitAttempts)
-	}
-	if got := effectiveAttempts(10, FailureRateLimited); got != 10 {
-		t.Fatalf("attempts = %d, want 10 (the plan's own budget must win when higher)", got)
-	}
-	// Other classes keep the plan's word exactly.
-	for _, c := range []FailureClass{FailureHarnessError, FailureTimeout, FailureContractMiss} {
-		if got := effectiveAttempts(2, c); got != 2 {
-			t.Errorf("%q attempts = %d, want 2 untouched", c, got)
-		}
-	}
-}

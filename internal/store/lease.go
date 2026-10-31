@@ -124,9 +124,15 @@ func (s *Store) Claim(nodeID, owner string, ttl time.Duration, now time.Time) (C
 			out.Reason = "dependencies not done"
 			return nil
 		}
-		if ns.Attempts >= n.MaxAttempts {
+		// The budget must be the SAME number the retry policy granted, or the
+		// two disagree and the extra attempts never happen: the run sets the
+		// node back to PENDING with a six-attempt intent for a throttled
+		// provider, and then this check reads the raw plan value and fails the
+		// node on the very next tick.
+		budget := plan.EffectiveAttempts(n.MaxAttempts, ns.FailureClass)
+		if ns.Attempts >= budget {
 			ns.Status = plan.StatusFailed
-			ns.LastError = fmt.Sprintf("exhausted %d attempt(s)", n.MaxAttempts)
+			ns.LastError = fmt.Sprintf("exhausted %d attempt(s)", budget)
 			out.Reason = ns.LastError
 			return nil
 		}
