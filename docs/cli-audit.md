@@ -98,3 +98,12 @@ fixed: `dagrun skill` exists and prints it.)
    attempt floor — and the budget is decided in ONE place, because the retry
    policy and the claim check had disagreed and the extra attempts never
    happened.
+
+## Not yet wired (not a defect, a gap to close)
+
+`internal/tracera.Import` and `ImportJSON` exist and are tested, but there is
+no `dagrun import` subcommand: the task that added the importer was forbidden
+from touching `main.go`. An agent that wants the reverse direction today must
+call the function directly or load the package. Wiring the subcommand is a
+one-file change in `main.go` and `cmd_import.go` and is the obvious next
+step.
