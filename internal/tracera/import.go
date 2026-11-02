@@ -73,13 +73,13 @@ func Import(payload Payload) (ImportResult, error) {
 			}
 		}
 		n := &plan.Node{
-			ID:       id,
-			Kind:     kind,
-			Title:    it.Title,
-			Estimate: it.Estimate,
-			Role:     it.Role,
-			Timeout:  "30m",
-			Deps:     []string{},
+			ID:        id,
+			Kind:      kind,
+			Title:     it.Title,
+			Estimate:  it.Estimate,
+			Role:      it.Role,
+			Timeout:   "30m",
+			Deps:      []string{},
 			Artifacts: []plan.Artifact{},
 		}
 		if n.Title == "" {

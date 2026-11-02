@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -622,6 +623,28 @@ var sessionEnvDrop = map[string]bool{
 
 var sessionEnvDropPrefix = []string{"JCODE_TUI_INHERITED_"}
 
+// opencodeKeys injects the opencode-go credentials that dagrun spawns
+// (jcode/kcode) need. The provider reads OPENCODE_GO_POOL_KEY per
+// config.toml, and the env file is the source of truth for which pool key
+// currently has capacity. Without this, a child inherits whatever (possibly
+// exhausted) key the parent shell happens to export, so dagrun run fails
+// even when a serving key exists on disk.
+func opencodeKeys() []string {
+	envPath := filepath.Join(os.Getenv("HOME"), ".jcode", "opencode-go.env")
+	var keys []string
+	if d, err := os.ReadFile(envPath); err == nil {
+		apiKey := regexp.MustCompile(`OPENCODE_GO_API_KEY=([A-Za-z0-9_-]+)`).FindStringSubmatch(string(d))
+		if len(apiKey) > 1 {
+			keys = append(keys, "OPENCODE_GO_API_KEY="+apiKey[1])
+		}
+		poolKey := regexp.MustCompile(`OPENCODE_GO_POOL_KEY=([A-Za-z0-9_-]+)`).FindStringSubmatch(string(d))
+		if len(poolKey) > 1 {
+			keys = append(keys, "OPENCODE_GO_POOL_KEY="+poolKey[1])
+		}
+	}
+	return keys
+}
+
 // childEnv gives each child a clean, non-interactive environment: the parent's
 // session and provider bindings are removed so per-node provider/model choices
 // actually take effect.
@@ -649,5 +672,6 @@ func childEnv() []string {
 		}
 		env = append(env, kv)
 	}
+	env = append(env, opencodeKeys()...)
 	return append(env, "DAGRUN=1", "CI=1")
 }

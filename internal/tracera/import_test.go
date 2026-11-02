@@ -23,8 +23,6 @@ func makePlanForImport(t *testing.T) *plan.Plan {
 	return p
 }
 
-
-
 func buildStateForImport(p *plan.Plan) *store.State {
 	st := &store.State{Run: p.Run, Nodes: map[string]*store.NodeState{}}
 	for _, n := range p.Nodes {

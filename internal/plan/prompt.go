@@ -75,6 +75,17 @@ func Prompt(p *Plan, n *Node, idx map[string]*Node) string {
 		fmt.Fprintf(&b, "- The command `%s` must exit 0.\n", n.Check)
 	}
 
+	// The kind-specific contract. Verification enforces it, so the agent has
+	// to be able to see it: a rule that is not in the prompt is a rule the
+	// agent cannot meet.
+	if reqs := KindRequirements(n.Kind); len(reqs) > 0 {
+		b.WriteString("\n## Contract for this node kind\n\n")
+		b.WriteString("Verification checks these in addition to the artifact requirements above:\n")
+		for _, r := range reqs {
+			fmt.Fprintf(&b, "- %s\n", r)
+		}
+	}
+
 	b.WriteString("\n## Rules\n\n")
 	b.WriteString("1. Create the artifacts above. Do not describe them in chat instead of writing them.\n")
 	b.WriteString("2. Do not modify artifacts owned by other nodes.\n")
