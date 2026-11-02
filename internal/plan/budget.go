@@ -1,6 +1,9 @@
 package plan
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Cost budgeting for an unattended run.
 //
@@ -165,14 +168,41 @@ var DefaultRates = map[string]Rate{
 //
 // A missing rate must not mean a free run: an unknown model is priced at the
 // default rather than at zero.
+//
+// The substring fallback is deterministic: Go's map iteration order is
+// randomized, so a bare `range` over DefaultRates would return a DIFFERENT
+// rate on every call for the same model. That is not a theoretical concern —
+// a run whose nodes priced at $0.28/M and at $15/M on alternating calls would
+// report a spend that is not reproducible, and a budget ceiling checked
+// against it would be meaningless. The candidates are therefore sorted and
+// the first match wins.
+//
+// An empty model name matches EVERY table entry as a substring, so it is
+// special-cased to the mid-range default before the fallback runs.
 func DefaultRate(model string) Rate {
 	if r, ok := DefaultRates[model]; ok {
 		return r
 	}
-	for name, r := range DefaultRates {
-		if strings.Contains(model, name) || strings.Contains(name, model) {
+	name := strings.TrimSpace(model)
+	if name == "" {
+		return Rate{InputPerMillion: 3, OutputPerMillion: 15, CacheReadPerMillion: 0.3}
+	}
+	for _, key := range sortedRateKeys() {
+		r := DefaultRates[key]
+		if strings.Contains(name, key) || strings.Contains(key, name) {
 			return r
 		}
 	}
 	return Rate{InputPerMillion: 3, OutputPerMillion: 15, CacheReadPerMillion: 0.3}
+}
+
+// sortedRateKeys returns the rate table's keys in a stable order, so every
+// lookup walks the table the same way.
+func sortedRateKeys() []string {
+	keys := make([]string, 0, len(DefaultRates))
+	for k := range DefaultRates {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
