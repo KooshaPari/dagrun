@@ -101,9 +101,12 @@ fixed: `dagrun skill` exists and prints it.)
 
 ## Not yet wired (not a defect, a gap to close)
 
-`internal/tracera.Import` and `ImportJSON` exist and are tested, but there is
-no `dagrun import` subcommand: the task that added the importer was forbidden
-from touching `main.go`. An agent that wants the reverse direction today must
-call the function directly or load the package. Wiring the subcommand is a
-one-file change in `main.go` and `cmd_import.go` and is the obvious next
-step.
+None outstanding from this audit. The last one is closed:
+
+**`dagrun import` was package-only.** FIXED. `internal/tracera.Import` and
+`ImportJSON` existed and were tested, but no subcommand reached them, so the
+reverse direction (Tracera payload → plan) was unreachable from the CLI.
+`dagrun import` now reads a payload from a file or stdin, reconstructs the
+plan, reports dropped items on stderr, and writes YAML to `--out` or stdout.
+It is in the dispatch switch, in `usage()`, and in the `--help` exit-zero
+regression list.
